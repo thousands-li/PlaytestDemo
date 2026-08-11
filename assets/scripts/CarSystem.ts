@@ -1,0 +1,622 @@
+import { Node, tween, Vec3 } from 'cc';
+import type { TreeLevel, TreeSlot } from './TreeSystem';
+
+export interface CarActor {
+    node: Node;
+    play(name: string): boolean;
+    update(dt: number, fps?: number): void;
+}
+
+export interface CarSystemConfig {
+    actors: Node | null;
+    configuredCarNodes: (Node | null)[];
+    carPlaneNodes: (Node | null)[];
+    upgrade2Node: Node | null;
+    upgrade3Node: Node | null;
+    previewFramePath: string;
+    isEnded: boolean;
+    treeOffsetX: number;
+    treeOffsetY: number;
+    moveToTreeDuration: number;
+    cutDelay: number;
+    returnDuration: number;
+    workInterval: number;
+    retryInterval: number;
+    routeDirectionX: number;
+    routeDirectionY: number;
+    routeHalfWidth: number;
+    cutBatchSize: number;
+    blockedWiggleDistance: number;
+    blockedWiggleHalfDuration: number;
+    blockedWiggleInterval: number;
+}
+
+export interface CarSystemCallbacks<T extends CarActor> {
+    findChildDeep(parent: Node, name: string): Node | null;
+    setupSpriteNode(node: Node, framePath: string, width: number, height: number): void;
+    createActor(node: Node): T;
+    getRouteTrees(): TreeSlot[];
+    cutTree(tree: TreeSlot, carLevel: TreeLevel): void;
+    startTreeShake(tree: TreeSlot): void;
+    stopTreeShake(tree: TreeSlot): void;
+    spawnUpgradeEffect(position: Vec3): void;
+    showNeedUpgradePrompt(target: Node): void;
+    playCarAudio(): void;
+    playUiAudio(): void;
+    showWaitTreeWoodGuide(): void;
+    scheduleOnce(done: () => void, delay: number): void;
+}
+
+interface RouteWork {
+    front: TreeSlot | null;
+    batch: TreeSlot[];
+    blockedBatch: TreeSlot[];
+}
+
+interface CarUnit<T extends CarActor> {
+    index: number;
+    actor: T | null;
+    node: Node | null;
+    level: TreeLevel;
+    unlocked: boolean;
+    busy: boolean;
+    blockedTrees: TreeSlot[];
+    blockedTween: any;
+    blockedBasePosition: Vec3 | null;
+    blockedPulseId: number;
+    routeOrigin: Vec3 | null;
+}
+
+const MAX_CARS = 3;
+
+export class CarSystem<T extends CarActor> {
+    private readonly units: CarUnit<T>[] = Array.from({ length: MAX_CARS }, (_, index) => this.createUnit(index));
+    private activeBlockedUnitIndex: number | null = null;
+
+    public constructor(
+        private readonly getConfig: () => CarSystemConfig,
+        private readonly callbacks: CarSystemCallbacks<T>,
+    ) {}
+
+    public get unlocked() {
+        return this.units.some((unit) => unit.unlocked);
+    }
+
+    public get level() {
+        return this.getActiveUpgradeUnit()?.level ?? this.getFirstUnlockedUnit()?.level ?? 1;
+    }
+
+    public get node() {
+        return this.getActiveUpgradeUnit()?.node ?? this.getFirstUnlockedUnit()?.node ?? null;
+    }
+
+    public prepareSceneNode() {
+        const config = this.getConfig();
+        let firstCar: Node | null = null;
+
+        this.units.forEach((unit) => {
+            const car = this.resolveExistingCarNode(unit, config);
+            if (!car) {
+                return;
+            }
+
+            unit.node = car;
+            this.callbacks.setupSpriteNode(car, config.previewFramePath, 150, 110);
+            car.active = false;
+            if (!firstCar) {
+                firstCar = car;
+            }
+        });
+
+        return firstCar;
+    }
+
+    public updateAnimation(dt: number, fps: number) {
+        this.units.forEach((unit) => unit.actor?.update(dt, fps));
+    }
+
+    public canUnlock(index: number, hasCoins: boolean) {
+        const unit = this.getUnit(index);
+        const plane = this.getCarPlaneNode(this.getConfig(), index);
+        return !!unit
+            && !unit.unlocked
+            && hasCoins
+            && !!plane?.isValid
+            && plane.active;
+    }
+
+    public hasUnlockTarget(hasCoins: boolean) {
+        return this.units.some((unit) => this.canUnlock(unit.index, hasCoins));
+    }
+
+    public canUpgradeTo(level: 2 | 3, hasCoins: boolean) {
+        return !!this.getUpgradeTargetUnit(level) && hasCoins;
+    }
+
+    public unlock(index = 0) {
+        const config = this.getConfig();
+        const unit = this.getUnit(index);
+        if (!unit || !config.actors?.isValid || unit.unlocked) {
+            return false;
+        }
+
+        unit.unlocked = true;
+        unit.level = 1;
+        unit.busy = false;
+        unit.blockedTrees = [];
+        unit.blockedBasePosition = null;
+        unit.routeOrigin = null;
+        unit.blockedPulseId += 1;
+        this.callbacks.playCarAudio();
+
+        const plane = this.getCarPlaneNode(config, index);
+        if (plane?.isValid) {
+            plane.active = false;
+        }
+
+        const configuredCar = this.getConfiguredCarNode(config, index);
+        const scenePosition = configuredCar?.isValid
+            ? configuredCar.position.clone()
+            : (unit.node?.isValid ? unit.node.position.clone() : null);
+        const carNode = configuredCar ?? this.resolveExistingCarNode(unit, config);
+        if (!carNode?.isValid) {
+            console.warn(`${this.getCarNodeName(index)} is missing in the scene. Add it under Actors instead of creating it at runtime.`);
+            unit.unlocked = false;
+            return false;
+        }
+        this.callbacks.setupSpriteNode(carNode, config.previewFramePath, 150, 110);
+        carNode.setPosition(scenePosition ?? plane?.position ?? Vec3.ZERO);
+        carNode.active = true;
+        unit.node = carNode;
+        unit.routeOrigin = carNode.position.clone();
+
+        unit.actor = this.callbacks.createActor(carNode);
+        this.playLevelVisual(unit, 1);
+        this.scheduleWork(unit);
+
+        this.refreshBlockedUpgradePlane(config);
+        this.callbacks.showWaitTreeWoodGuide();
+        return true;
+    }
+
+    public upgrade(level: 2 | 3) {
+        const unit = this.getUpgradeTargetUnit(level);
+        if (!unit?.unlocked) {
+            return false;
+        }
+
+        unit.level = level;
+        this.callbacks.playUiAudio();
+        this.callbacks.spawnUpgradeEffect(unit.node?.position ?? Vec3.ZERO);
+        this.playLevelVisual(unit, level);
+
+        this.callbacks.showWaitTreeWoodGuide();
+        if (unit.blockedTrees.some((tree) => tree.alive && tree.level <= unit.level)) {
+            this.releaseBlockedTrees(unit);
+        } else if (unit.blockedTrees.some((tree) => tree.alive && tree.level > unit.level)) {
+            this.setActiveBlockedUnit(unit);
+            this.refreshBlockedUpgradePlane(this.getConfig());
+        } else {
+            this.stopBlockedLoop(unit);
+            this.scheduleWork(unit);
+        }
+        return true;
+    }
+
+    public scheduleWork(unitOrIndex?: CarUnit<T> | number) {
+        const config = this.getConfig();
+        const unit = this.resolveUnit(unitOrIndex) ?? this.getFirstUnlockedUnit();
+        if (!unit?.node?.isValid || unit.busy || unit.blockedTrees.length > 0 || config.isEnded) {
+            return;
+        }
+
+        const next = this.getNextRouteWork(unit, config);
+        if (next.batch.length > 0) {
+            this.moveToBatch(unit, next.batch, config);
+            return;
+        }
+
+        if (next.front) {
+            this.moveToBlockedTree(unit, next.front, config);
+            return;
+        }
+
+        if (config.retryInterval > 0) {
+            this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+        }
+    }
+
+    private createUnit(index: number): CarUnit<T> {
+        return {
+            index,
+            actor: null,
+            node: null,
+            level: 1,
+            unlocked: false,
+            busy: false,
+            blockedTrees: [],
+            blockedTween: null,
+            blockedBasePosition: null,
+            blockedPulseId: 0,
+            routeOrigin: null,
+        };
+    }
+
+    private resolveUnit(unitOrIndex?: CarUnit<T> | number) {
+        if (typeof unitOrIndex === 'number') {
+            return this.getUnit(unitOrIndex);
+        }
+        return unitOrIndex ?? null;
+    }
+
+    private getUnit(index: number) {
+        return this.units[index] ?? null;
+    }
+
+    private getFirstUnlockedUnit() {
+        return this.units.find((unit) => unit.unlocked) ?? null;
+    }
+
+    private getActiveUpgradeUnit() {
+        if (this.activeBlockedUnitIndex === null) {
+            return null;
+        }
+        const unit = this.getUnit(this.activeBlockedUnitIndex);
+        if (!unit || !this.hasLiveBlockedTrees(unit)) {
+            this.activeBlockedUnitIndex = this.findNextBlockedUnitIndex();
+            return this.activeBlockedUnitIndex === null ? null : this.getUnit(this.activeBlockedUnitIndex);
+        }
+        return unit;
+    }
+
+    private getUpgradeTargetUnit(level: 2 | 3) {
+        const requiredCurrentLevel = (level - 1) as TreeLevel;
+        const active = this.getActiveUpgradeUnit();
+        if (active?.unlocked && active.level === requiredCurrentLevel) {
+            return active;
+        }
+        return this.units.find((unit) => (
+            unit.unlocked
+            && unit.level === requiredCurrentLevel
+            && this.hasLiveBlockedTrees(unit)
+        )) ?? null;
+    }
+
+    private resolveExistingCarNode(unit: CarUnit<T>, config: CarSystemConfig) {
+        return this.getConfiguredCarNode(config, unit.index)
+            ?? (config.actors ? this.callbacks.findChildDeep(config.actors, this.getCarNodeName(unit.index)) : null);
+    }
+
+    private getConfiguredCarNode(config: CarSystemConfig, index: number) {
+        return config.configuredCarNodes[index] ?? null;
+    }
+
+    private getCarPlaneNode(config: CarSystemConfig, index: number) {
+        return config.carPlaneNodes[index] ?? null;
+    }
+
+    private getCarNodeName(index: number) {
+        return index === 0 ? 'Car' : `Car${index + 1}`;
+    }
+
+    private playLevelVisual(unit: CarUnit<T>, level: TreeLevel) {
+        if (!unit.actor && unit.node?.isValid) {
+            unit.actor = this.callbacks.createActor(unit.node);
+        }
+        const clipName = `car${level}`;
+        if (!unit.actor?.play(clipName)) {
+            console.warn(`Car level visual clip missing: ${clipName}`);
+        }
+    }
+
+    private moveToBatch(unit: CarUnit<T>, batch: TreeSlot[], config: CarSystemConfig) {
+        const target = batch[0];
+        if (!target?.node.isValid) {
+            this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+            return;
+        }
+
+        this.moveToPosition(unit, this.getTreeWorkPosition(unit, target, config), config, () => {
+            this.cutBatchAndContinue(unit, batch, config);
+        });
+    }
+
+    private moveToBlockedTree(unit: CarUnit<T>, tree: TreeSlot, config: CarSystemConfig) {
+        if (!tree.node.isValid) {
+            this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+            return;
+        }
+
+        const workPosition = this.getTreeWorkPosition(unit, tree, config);
+        this.moveToPosition(unit, workPosition, config, () => {
+            if (!tree.alive) {
+                this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+                return;
+            }
+            if (tree.level <= unit.level) {
+                this.cutBatchAndContinue(unit, this.getNextRouteWork(unit, config).batch, config);
+                return;
+            }
+            const next = this.getNextRouteWork(unit, config);
+            const blockedBatch = next.blockedBatch.length > 0 ? next.blockedBatch : [tree];
+            this.startBlockedLoop(unit, blockedBatch, workPosition, config);
+        });
+    }
+
+    private moveToPosition(unit: CarUnit<T>, position: Vec3, config: CarSystemConfig, done: () => void) {
+        if (!unit.node?.isValid) {
+            return;
+        }
+        unit.busy = true;
+
+        const distance = Vec3.distance(unit.node.position, position);
+        if (distance <= 1) {
+            unit.node.setPosition(position);
+            unit.busy = false;
+            done();
+            return;
+        }
+
+        tween(unit.node)
+            .to(Math.max(0.01, config.moveToTreeDuration), { position })
+            .call(() => {
+                unit.busy = false;
+                done();
+            })
+            .start();
+    }
+
+    private cutBatchAndContinue(unit: CarUnit<T>, batch: TreeSlot[], config: CarSystemConfig) {
+        const cuttable = batch.filter((tree) => tree.alive && tree.level <= unit.level);
+        if (cuttable.length <= 0) {
+            this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+            return;
+        }
+
+        unit.busy = true;
+        cuttable.forEach((tree) => {
+            this.callbacks.stopTreeShake(tree);
+            this.callbacks.cutTree(tree, unit.level);
+        });
+        this.callbacks.scheduleOnce(() => {
+            unit.busy = false;
+            this.scheduleWork(unit);
+        }, Math.max(0, config.cutDelay));
+    }
+
+    private startBlockedLoop(unit: CarUnit<T>, trees: TreeSlot[], workPosition: Vec3, config: CarSystemConfig) {
+        if (!unit.node?.isValid) {
+            return;
+        }
+
+        const blockedBatch = trees
+            .filter((tree) => tree.alive && tree.node.isValid && tree.level > unit.level)
+            .slice(0, Math.max(1, Math.floor(config.cutBatchSize)));
+        if (blockedBatch.length <= 0) {
+            this.callbacks.scheduleOnce(() => this.scheduleWork(unit), config.retryInterval);
+            return;
+        }
+
+        unit.blockedTrees = blockedBatch;
+        this.callbacks.showWaitTreeWoodGuide();
+        this.revealAdditionalCarPlanes(config);
+        this.setActiveBlockedUnit(unit);
+        this.refreshBlockedUpgradePlane(config);
+
+        unit.blockedBasePosition = workPosition.clone();
+        unit.node.setPosition(workPosition);
+        this.stopBlockedTweenOnly(unit);
+        unit.blockedPulseId += 1;
+        this.playBlockedPulse(unit, unit.blockedPulseId);
+    }
+
+    private playBlockedPulse(unit: CarUnit<T>, pulseId: number) {
+        const config = this.getConfig();
+        if (pulseId !== unit.blockedPulseId || !unit.node?.isValid || config.isEnded) {
+            return;
+        }
+
+        const blockedBatch = unit.blockedTrees
+            .filter((tree) => tree.alive && tree.node.isValid && tree.level > unit.level)
+            .slice(0, Math.max(1, Math.floor(config.cutBatchSize)));
+        if (blockedBatch.length <= 0) {
+            this.releaseBlockedTrees(unit);
+            return;
+        }
+
+        unit.blockedTrees = blockedBatch;
+        blockedBatch.forEach((tree) => this.callbacks.startTreeShake(tree));
+        this.callbacks.showNeedUpgradePrompt(unit.node);
+
+        const direction = this.getRouteDirection(config);
+        const distance = Math.max(1, config.blockedWiggleDistance);
+        const halfDuration = Math.max(0.01, config.blockedWiggleHalfDuration);
+        const base = unit.blockedBasePosition?.clone() ?? unit.node.position.clone();
+        const forward = base.clone().add(new Vec3(direction.x * distance, direction.y * distance, 0));
+        const back = base.clone().add(new Vec3(-direction.x * distance * 0.45, -direction.y * distance * 0.45, 0));
+        unit.node.setPosition(base);
+        this.stopBlockedTweenOnly(unit);
+        const pulse = tween(unit.node)
+            .to(halfDuration, { position: forward })
+            .to(halfDuration, { position: back })
+            .to(halfDuration, { position: base })
+            .call(() => {
+                if (unit.blockedTween === pulse) {
+                    unit.blockedTween = null;
+                }
+                if (unit.node?.isValid) {
+                    unit.node.setPosition(base);
+                }
+                const interval = Math.max(0.01, this.getConfig().blockedWiggleInterval);
+                this.callbacks.scheduleOnce(() => this.playBlockedPulse(unit, pulseId), interval);
+            });
+        unit.blockedTween = pulse;
+        pulse.start();
+    }
+
+    private releaseBlockedTrees(unit: CarUnit<T>) {
+        this.stopBlockedLoop(unit);
+
+        const config = this.getConfig();
+        const next = this.getNextRouteWork(unit, config);
+        if (next.batch.length > 0) {
+            this.cutBatchAndContinue(unit, next.batch, config);
+            return;
+        }
+
+        this.scheduleWork(unit);
+    }
+
+    private stopBlockedLoop(unit: CarUnit<T>) {
+        const trees = unit.blockedTrees;
+        unit.blockedPulseId += 1;
+        this.stopBlockedTweenOnly(unit);
+        trees.forEach((tree) => this.callbacks.stopTreeShake(tree));
+        if (unit.node?.isValid && unit.blockedBasePosition) {
+            unit.node.setPosition(unit.blockedBasePosition);
+        }
+        unit.blockedBasePosition = null;
+        unit.blockedTrees = [];
+        if (this.activeBlockedUnitIndex === unit.index) {
+            this.activeBlockedUnitIndex = this.findNextBlockedUnitIndex();
+        }
+        this.refreshBlockedUpgradePlane(this.getConfig());
+    }
+
+    private stopBlockedTweenOnly(unit: CarUnit<T>) {
+        if (unit.blockedTween) {
+            unit.blockedTween.stop();
+            unit.blockedTween = null;
+        }
+    }
+
+    private hasLiveBlockedTrees(unit: CarUnit<T>) {
+        return unit.blockedTrees.some((tree) => tree.alive && tree.node.isValid && tree.level > unit.level);
+    }
+
+    private setActiveBlockedUnit(unit: CarUnit<T>) {
+        const active = this.getActiveUpgradeUnit();
+        if (!active || active.index === unit.index) {
+            this.activeBlockedUnitIndex = unit.index;
+        }
+    }
+
+    private findNextBlockedUnitIndex() {
+        return this.units.find((unit) => unit.unlocked && this.hasLiveBlockedTrees(unit))?.index ?? null;
+    }
+
+    private hideUpgradePlanes(config: CarSystemConfig) {
+        if (config.upgrade2Node?.isValid) {
+            config.upgrade2Node.active = false;
+        }
+        if (config.upgrade3Node?.isValid) {
+            config.upgrade3Node.active = false;
+        }
+    }
+
+    private refreshBlockedUpgradePlane(config: CarSystemConfig) {
+        this.hideUpgradePlanes(config);
+        const unit = this.getActiveUpgradeUnit();
+        if (!unit) {
+            return;
+        }
+        if (unit.level === 1 && config.upgrade2Node?.isValid) {
+            config.upgrade2Node.active = true;
+        } else if (unit.level === 2 && config.upgrade3Node?.isValid) {
+            config.upgrade3Node.active = true;
+        }
+    }
+
+    private revealAdditionalCarPlanes(config: CarSystemConfig) {
+        this.units.slice(1).forEach((unit) => {
+            const plane = this.getCarPlaneNode(config, unit.index);
+            if (!unit.unlocked && plane?.isValid) {
+                plane.active = true;
+            }
+        });
+    }
+
+    private getNextRouteWork(unit: CarUnit<T>, config: CarSystemConfig): RouteWork {
+        const direction = this.getRouteDirection(config);
+        const origin = unit.routeOrigin ?? unit.node?.position.clone() ?? Vec3.ZERO.clone();
+        const currentProgress = unit.node?.isValid
+            ? this.getRouteProgress(unit.node.position, origin, direction)
+            : 0;
+        const routeTrees = this.callbacks.getRouteTrees()
+            .filter((tree) => {
+                if (!tree.alive || !tree.node.isValid || !this.isTreeOnRoute(tree, config, origin, direction)) {
+                    return false;
+                }
+                return this.getRouteProgress(tree.node.position, origin, direction) >= currentProgress - 1;
+            })
+            .sort((a, b) => (
+                this.getRouteProgress(a.node.position, origin, direction)
+                - this.getRouteProgress(b.node.position, origin, direction)
+            ));
+        const front = routeTrees[0] ?? null;
+        if (!front || front.level > unit.level) {
+            return { front, batch: [] as TreeSlot[], blockedBatch: routeTrees.slice(0, Math.max(1, Math.floor(config.cutBatchSize))) };
+        }
+
+        const batch: TreeSlot[] = [];
+        const limit = Math.max(1, Math.floor(config.cutBatchSize));
+        for (const tree of routeTrees) {
+            if (tree.level > unit.level) {
+                break;
+            }
+            batch.push(tree);
+            if (batch.length >= limit) {
+                break;
+            }
+        }
+        return { front, batch, blockedBatch: [] as TreeSlot[] };
+    }
+
+    private getTreeWorkPosition(unit: CarUnit<T>, tree: TreeSlot, config: CarSystemConfig) {
+        const direction = this.getRouteDirection(config);
+        const origin = unit.routeOrigin ?? unit.node?.position.clone() ?? Vec3.ZERO.clone();
+        const approach = this.getApproachDistance(direction, config);
+        const treeProgress = this.getRouteProgress(tree.node.position, origin, direction);
+        const currentProgress = unit.node?.isValid
+            ? this.getRouteProgress(unit.node.position, origin, direction)
+            : 0;
+        return this.getRoutePosition(Math.max(currentProgress, treeProgress - approach), origin, direction);
+    }
+
+    private isTreeOnRoute(tree: TreeSlot, config: CarSystemConfig, origin: Vec3, direction: Vec3) {
+        const halfWidth = Math.max(0, config.routeHalfWidth);
+        if (halfWidth <= 0) {
+            return true;
+        }
+
+        const dx = tree.node.position.x - origin.x;
+        const dy = tree.node.position.y - origin.y;
+        const cross = Math.abs(dx * direction.y - dy * direction.x);
+        return cross <= halfWidth;
+    }
+
+    private getRouteDirection(config: CarSystemConfig) {
+        const length = Math.hypot(config.routeDirectionX, config.routeDirectionY);
+        if (length <= 0.0001) {
+            return new Vec3(1, 0, 0);
+        }
+        return new Vec3(config.routeDirectionX / length, config.routeDirectionY / length, 0);
+    }
+
+    private getRouteProgress(position: Vec3, origin: Vec3, direction: Vec3) {
+        return (position.x - origin.x) * direction.x + (position.y - origin.y) * direction.y;
+    }
+
+    private getRoutePosition(progress: number, origin: Vec3, direction: Vec3) {
+        return new Vec3(
+            origin.x + direction.x * progress,
+            origin.y + direction.y * progress,
+            origin.z,
+        );
+    }
+
+    private getApproachDistance(direction: Vec3, config: CarSystemConfig) {
+        const projectedOffset = -(config.treeOffsetX * direction.x + config.treeOffsetY * direction.y);
+        return projectedOffset > 1 ? projectedOffset : 70;
+    }
+}

@@ -1,0 +1,33 @@
+
+#///////////////////////////
+# Cocos Creator Project
+#///////////////////////////
+
+/library/
+/temp/
+/local/
+/build/
+/dist/
+/profiles/
+/native/engine/android/**/*/assets
+
+# Local/generated artifacts
+.codex_video_review/
+*.log
+Thumbs.db
+Thumbs.db.meta
+
+#//////////////////////////
+# NPM
+#//////////////////////////
+node_modules/
+
+#//////////////////////////
+# VSCode
+#//////////////////////////
+.vscode/
+
+#//////////////////////////
+# WebStorm
+#//////////////////////////
+.idea/

@@ -178,8 +178,8 @@ export class GameplayActionSystem {
         return this.carSystem.unlock(index);
     }
 
-    public upgradeCar(level: 2 | 3) {
-        return this.carSystem.upgrade(level);
+    public upgradeCar(index: number, level: 2 | 3) {
+        return this.carSystem.upgrade(index, level);
     }
 
     private addHeldWood() {
@@ -231,11 +231,11 @@ export class GameplayActionSystem {
             this.callbacks.setTutorialGuideStage('carUnlock');
             return;
         }
-        if (this.carSystem.canUpgradeTo(2, projectedCoins >= config.carUpgrade2Cost)) {
+        if (this.carSystem.hasUpgradeTarget(2, projectedCoins >= config.carUpgrade2Cost)) {
             this.callbacks.setTutorialGuideStage('upgrade2');
             return;
         }
-        if (this.carSystem.canUpgradeTo(3, projectedCoins >= config.carUpgrade3Cost)) {
+        if (this.carSystem.hasUpgradeTarget(3, projectedCoins >= config.carUpgrade3Cost)) {
             this.callbacks.setTutorialGuideStage('upgrade3');
             return;
         }

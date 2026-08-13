@@ -22,7 +22,18 @@ export class SellZoneVisualSystem {
 
     public reset() {
         this.highlightedZones.clear();
-        ['sell', 'car', 'car2', 'car3', 'upgrade2', 'upgrade3'].forEach((name) => this.updateZoneHighlight(name, false));
+        [
+            'sell',
+            'car',
+            'car2',
+            'car3',
+            'upgrade2',
+            'upgrade2Car2',
+            'upgrade2Car3',
+            'upgrade3',
+            'upgrade3Car2',
+            'upgrade3Car3',
+        ].forEach((name) => this.updateZoneHighlight(name, false));
     }
 
     public updateHighlight(highlighted: boolean) {

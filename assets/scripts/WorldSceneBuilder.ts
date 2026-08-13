@@ -25,6 +25,7 @@ export interface WorldSceneBuilderConfig {
     sellZoneRadius: number;
     coinZoneRadius: number;
     carZoneRadius: number;
+    carUnlockPlaneScale: number;
     carPlane2OffsetX: number;
     carPlane2OffsetY: number;
     carPlane3OffsetX: number;
@@ -51,7 +52,8 @@ export interface WorldSceneBuilderCallbacks {
     findChildDeep(parent: Node, name: string): Node | null;
     findNumberedChildren(parent: Node, prefix: string): Node[];
     addZone(name: string, node: Node, radius: number, matchNodeBounds?: boolean): void;
-    rebuildTrees(nodes: Node[]): void;
+    buildTreeRoute(): { trees: Node[]; levels: import('./TreeSystem').TreeLevel[] } | null;
+    rebuildTrees(nodes: Node[], levels?: import('./TreeSystem').TreeLevel[]): void;
 }
 
 export class WorldSceneBuilder {
@@ -99,20 +101,36 @@ export class WorldSceneBuilder {
         this.buildCarPlane(config.carZone2Node, 'CarPlane2', 'car2', false, config);
         this.buildCarPlane(config.carZone3Node, 'CarPlane3', 'car3', false, config);
 
-        const upgrade2 = this.callbacks.resolveSceneNode(config.upgrade2ZoneNode, config.world, 'UpgradePlane2');
-        this.uiFactory.setupSpriteNode(upgrade2, config.platformImagePath, 150, 92);
-        this.uiFactory.addOrUpdateLabel('UpgradeCost2', upgrade2, config.carUpgrade2Cost.toString(), 0, -2, 28, Color.WHITE);
-        this.callbacks.addZone('upgrade2', upgrade2, config.upgrade2ZoneRadius);
-        upgrade2.active = false;
-
-        const upgrade3 = this.callbacks.resolveSceneNode(config.upgrade3ZoneNode, config.world, 'UpgradePlane3');
-        this.uiFactory.setupSpriteNode(upgrade3, config.platformImagePath, 165, 100);
-        this.uiFactory.addOrUpdateLabel('UpgradeCost3', upgrade3, config.carUpgrade3Cost.toString(), 0, -2, 28, Color.WHITE);
-        this.callbacks.addZone('upgrade3', upgrade3, config.upgrade3ZoneRadius);
-        upgrade3.active = false;
+        for (let index = 0; index < 3; index += 1) {
+            this.buildUpgradePlane(index, 2, config);
+            this.buildUpgradePlane(index, 3, config);
+        }
 
         this.buildTrees(config);
         return { startPlaneNode: start, startPickupAnchor: startAnchor };
+    }
+
+    private buildUpgradePlane(index: number, level: 2 | 3, config: WorldSceneBuilderConfig) {
+        if (!config.world) {
+            return;
+        }
+        const suffix = index === 0 ? '' : `Car${index + 1}`;
+        const nodeName = `UpgradePlane${level}${suffix}`;
+        const zoneName = `upgrade${level}${suffix}`;
+        const configuredNode = index === 0
+            ? (level === 2 ? config.upgrade2ZoneNode : config.upgrade3ZoneNode)
+            : null;
+        const plane = this.callbacks.resolveSceneNode(configuredNode, config.world, nodeName);
+        const width = level === 2 ? 150 : 165;
+        const height = level === 2 ? 92 : 100;
+        const cost = level === 2 ? config.carUpgrade2Cost : config.carUpgrade3Cost;
+        const radius = level === 2 ? config.upgrade2ZoneRadius : config.upgrade3ZoneRadius;
+        this.uiFactory.setupSpriteNode(plane, config.platformImagePath, width, height);
+        plane.setScale(1, 1, 1);
+        plane.setSiblingIndex(plane.parent?.children.length ?? 0);
+        this.uiFactory.addOrUpdateLabel(`UpgradeCost${level}`, plane, cost.toString(), 0, -2, 28, Color.WHITE);
+        this.callbacks.addZone(zoneName, plane, radius);
+        plane.active = false;
     }
 
     private buildStartGlow(start: Node, config: WorldSceneBuilderConfig) {
@@ -148,6 +166,9 @@ export class WorldSceneBuilder {
             return null;
         }
         this.uiFactory.setupSpriteNode(plane, config.platformImagePath, 150, 92);
+        const scale = Math.max(0.01, config.carUnlockPlaneScale);
+        plane.setScale(scale, scale, 1);
+        plane.setSiblingIndex(plane.parent?.children.length ?? 0);
         this.uiFactory.addOrUpdateLabel('CarCost', plane, config.carUnlockCost.toString(), 0, -2, 28, Color.WHITE);
         this.callbacks.addZone(zoneName, plane, config.carZoneRadius);
         plane.active = active;
@@ -179,6 +200,11 @@ export class WorldSceneBuilder {
     }
 
     private buildTrees(config: WorldSceneBuilderConfig) {
+        const routeTrees = this.callbacks.buildTreeRoute();
+        if (routeTrees) {
+            this.callbacks.rebuildTrees(routeTrees.trees, routeTrees.levels);
+            return;
+        }
         if (!config.actors?.isValid) {
             this.callbacks.rebuildTrees(config.treeSceneNodes);
             return;

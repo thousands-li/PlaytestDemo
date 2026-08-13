@@ -11,8 +11,8 @@ export interface CarSystemConfig {
     actors: Node | null;
     configuredCarNodes: (Node | null)[];
     carPlaneNodes: (Node | null)[];
-    upgrade2Node: Node | null;
-    upgrade3Node: Node | null;
+    upgrade2Nodes: (Node | null)[];
+    upgrade3Nodes: (Node | null)[];
     previewFramePath: string;
     isEnded: boolean;
     treeOffsetX: number;
@@ -24,8 +24,11 @@ export interface CarSystemConfig {
     retryInterval: number;
     routeDirectionX: number;
     routeDirectionY: number;
+    routeRowDirectionX: number;
+    routeRowDirectionY: number;
     routeHalfWidth: number;
     cutBatchSize: number;
+    upgradePlaneBackOffset: number;
     blockedWiggleDistance: number;
     blockedWiggleHalfDuration: number;
     blockedWiggleInterval: number;
@@ -71,7 +74,6 @@ const MAX_CARS = 3;
 
 export class CarSystem<T extends CarActor> {
     private readonly units: CarUnit<T>[] = Array.from({ length: MAX_CARS }, (_, index) => this.createUnit(index));
-    private activeBlockedUnitIndex: number | null = null;
 
     public constructor(
         private readonly getConfig: () => CarSystemConfig,
@@ -83,11 +85,11 @@ export class CarSystem<T extends CarActor> {
     }
 
     public get level() {
-        return this.getActiveUpgradeUnit()?.level ?? this.getFirstUnlockedUnit()?.level ?? 1;
+        return this.getFirstBlockedUnit()?.level ?? this.getFirstUnlockedUnit()?.level ?? 1;
     }
 
     public get node() {
-        return this.getActiveUpgradeUnit()?.node ?? this.getFirstUnlockedUnit()?.node ?? null;
+        return this.getFirstBlockedUnit()?.node ?? this.getFirstUnlockedUnit()?.node ?? null;
     }
 
     public prepareSceneNode() {
@@ -129,8 +131,20 @@ export class CarSystem<T extends CarActor> {
         return this.units.some((unit) => this.canUnlock(unit.index, hasCoins));
     }
 
-    public canUpgradeTo(level: 2 | 3, hasCoins: boolean) {
-        return !!this.getUpgradeTargetUnit(level) && hasCoins;
+    public canUpgradeTo(index: number, level: 2 | 3, hasCoins: boolean) {
+        const plane = this.getUpgradePlaneNode(this.getConfig(), index, level);
+        return !!this.getUpgradeTargetUnit(index, level)
+            && hasCoins
+            && !!plane?.isValid
+            && plane.active;
+    }
+
+    public hasUpgradeTarget(level: 2 | 3, hasCoins: boolean) {
+        return this.units.some((unit) => this.canUpgradeTo(unit.index, level, hasCoins));
+    }
+
+    public areAllCarsFullyUpgraded() {
+        return this.units.every((unit) => unit.unlocked && unit.level >= 3);
     }
 
     public unlock(index = 0) {
@@ -150,6 +164,7 @@ export class CarSystem<T extends CarActor> {
         this.callbacks.playCarAudio();
 
         const plane = this.getCarPlaneNode(config, index);
+        const planeWorldPosition = plane?.isValid ? plane.worldPosition.clone() : null;
         if (plane?.isValid) {
             plane.active = false;
         }
@@ -165,7 +180,11 @@ export class CarSystem<T extends CarActor> {
             return false;
         }
         this.callbacks.setupSpriteNode(carNode, config.previewFramePath, 150, 110);
-        carNode.setPosition(scenePosition ?? plane?.position ?? Vec3.ZERO);
+        if (planeWorldPosition) {
+            carNode.setWorldPosition(planeWorldPosition);
+        } else {
+            carNode.setPosition(scenePosition ?? Vec3.ZERO);
+        }
         carNode.active = true;
         unit.node = carNode;
         unit.routeOrigin = carNode.position.clone();
@@ -174,13 +193,13 @@ export class CarSystem<T extends CarActor> {
         this.playLevelVisual(unit, 1);
         this.scheduleWork(unit);
 
-        this.refreshBlockedUpgradePlane(config);
+        this.refreshBlockedUpgradePlanes(config);
         this.callbacks.showWaitTreeWoodGuide();
         return true;
     }
 
-    public upgrade(level: 2 | 3) {
-        const unit = this.getUpgradeTargetUnit(level);
+    public upgrade(index: number, level: 2 | 3) {
+        const unit = this.getUpgradeTargetUnit(index, level);
         if (!unit?.unlocked) {
             return false;
         }
@@ -194,8 +213,7 @@ export class CarSystem<T extends CarActor> {
         if (unit.blockedTrees.some((tree) => tree.alive && tree.level <= unit.level)) {
             this.releaseBlockedTrees(unit);
         } else if (unit.blockedTrees.some((tree) => tree.alive && tree.level > unit.level)) {
-            this.setActiveBlockedUnit(unit);
-            this.refreshBlockedUpgradePlane(this.getConfig());
+            this.refreshBlockedUpgradePlanes(this.getConfig());
         } else {
             this.stopBlockedLoop(unit);
             this.scheduleWork(unit);
@@ -257,29 +275,19 @@ export class CarSystem<T extends CarActor> {
         return this.units.find((unit) => unit.unlocked) ?? null;
     }
 
-    private getActiveUpgradeUnit() {
-        if (this.activeBlockedUnitIndex === null) {
-            return null;
-        }
-        const unit = this.getUnit(this.activeBlockedUnitIndex);
-        if (!unit || !this.hasLiveBlockedTrees(unit)) {
-            this.activeBlockedUnitIndex = this.findNextBlockedUnitIndex();
-            return this.activeBlockedUnitIndex === null ? null : this.getUnit(this.activeBlockedUnitIndex);
-        }
-        return unit;
+    private getFirstBlockedUnit() {
+        return this.units.find((unit) => unit.unlocked && this.hasLiveBlockedTrees(unit)) ?? null;
     }
 
-    private getUpgradeTargetUnit(level: 2 | 3) {
+    private getUpgradeTargetUnit(index: number, level: 2 | 3) {
+        const unit = this.getUnit(index);
         const requiredCurrentLevel = (level - 1) as TreeLevel;
-        const active = this.getActiveUpgradeUnit();
-        if (active?.unlocked && active.level === requiredCurrentLevel) {
-            return active;
-        }
-        return this.units.find((unit) => (
-            unit.unlocked
+        return unit
+            && unit.unlocked
             && unit.level === requiredCurrentLevel
             && this.hasLiveBlockedTrees(unit)
-        )) ?? null;
+            ? unit
+            : null;
     }
 
     private resolveExistingCarNode(unit: CarUnit<T>, config: CarSystemConfig) {
@@ -293,6 +301,10 @@ export class CarSystem<T extends CarActor> {
 
     private getCarPlaneNode(config: CarSystemConfig, index: number) {
         return config.carPlaneNodes[index] ?? null;
+    }
+
+    private getUpgradePlaneNode(config: CarSystemConfig, index: number, level: 2 | 3) {
+        return (level === 2 ? config.upgrade2Nodes : config.upgrade3Nodes)[index] ?? null;
     }
 
     private getCarNodeName(index: number) {
@@ -400,8 +412,7 @@ export class CarSystem<T extends CarActor> {
         unit.blockedTrees = blockedBatch;
         this.callbacks.showWaitTreeWoodGuide();
         this.revealAdditionalCarPlanes(config);
-        this.setActiveBlockedUnit(unit);
-        this.refreshBlockedUpgradePlane(config);
+        this.refreshBlockedUpgradePlanes(config);
 
         unit.blockedBasePosition = workPosition.clone();
         unit.node.setPosition(workPosition);
@@ -477,10 +488,7 @@ export class CarSystem<T extends CarActor> {
         }
         unit.blockedBasePosition = null;
         unit.blockedTrees = [];
-        if (this.activeBlockedUnitIndex === unit.index) {
-            this.activeBlockedUnitIndex = this.findNextBlockedUnitIndex();
-        }
-        this.refreshBlockedUpgradePlane(this.getConfig());
+        this.refreshBlockedUpgradePlanes(this.getConfig());
     }
 
     private stopBlockedTweenOnly(unit: CarUnit<T>) {
@@ -494,37 +502,49 @@ export class CarSystem<T extends CarActor> {
         return unit.blockedTrees.some((tree) => tree.alive && tree.node.isValid && tree.level > unit.level);
     }
 
-    private setActiveBlockedUnit(unit: CarUnit<T>) {
-        const active = this.getActiveUpgradeUnit();
-        if (!active || active.index === unit.index) {
-            this.activeBlockedUnitIndex = unit.index;
-        }
-    }
-
-    private findNextBlockedUnitIndex() {
-        return this.units.find((unit) => unit.unlocked && this.hasLiveBlockedTrees(unit))?.index ?? null;
-    }
-
     private hideUpgradePlanes(config: CarSystemConfig) {
-        if (config.upgrade2Node?.isValid) {
-            config.upgrade2Node.active = false;
-        }
-        if (config.upgrade3Node?.isValid) {
-            config.upgrade3Node.active = false;
-        }
+        [...config.upgrade2Nodes, ...config.upgrade3Nodes].forEach((plane) => {
+            if (plane?.isValid) {
+                plane.active = false;
+            }
+        });
     }
 
-    private refreshBlockedUpgradePlane(config: CarSystemConfig) {
+    private refreshBlockedUpgradePlanes(config: CarSystemConfig) {
         this.hideUpgradePlanes(config);
-        const unit = this.getActiveUpgradeUnit();
-        if (!unit) {
+        this.units.forEach((unit) => {
+            if (!unit.unlocked || !this.hasLiveBlockedTrees(unit)) {
+                return;
+            }
+            const nextLevel = unit.level === 1 ? 2 : unit.level === 2 ? 3 : null;
+            if (!nextLevel) {
+                return;
+            }
+            const plane = this.getUpgradePlaneNode(config, unit.index, nextLevel);
+            if (plane?.isValid) {
+                plane.active = true;
+                this.placeUpgradePlaneBehindUnit(plane, unit, config);
+            }
+        });
+    }
+
+    private placeUpgradePlaneBehindUnit(plane: Node, unit: CarUnit<T>, config: CarSystemConfig) {
+        if (!unit.node?.isValid) {
             return;
         }
-        if (unit.level === 1 && config.upgrade2Node?.isValid) {
-            config.upgrade2Node.active = true;
-        } else if (unit.level === 2 && config.upgrade3Node?.isValid) {
-            config.upgrade3Node.active = true;
-        }
+        const direction = this.getRouteDirection(config);
+        const routeScale = Math.max(
+            Math.abs(unit.node.parent?.worldScale.x ?? 1),
+            Math.abs(unit.node.parent?.worldScale.y ?? 1),
+        );
+        const distance = Math.max(0, config.upgradePlaneBackOffset) * routeScale;
+        const target = unit.node.worldPosition.clone().subtract(new Vec3(
+            direction.x * distance,
+            direction.y * distance,
+            0,
+        ));
+        plane.setWorldPosition(target);
+        plane.setSiblingIndex(plane.parent?.children.length ?? 0);
     }
 
     private revealAdditionalCarPlanes(config: CarSystemConfig) {
@@ -538,20 +558,21 @@ export class CarSystem<T extends CarActor> {
 
     private getNextRouteWork(unit: CarUnit<T>, config: CarSystemConfig): RouteWork {
         const direction = this.getRouteDirection(config);
+        const rowDirection = this.getRouteRowDirection(config, direction);
         const origin = unit.routeOrigin ?? unit.node?.position.clone() ?? Vec3.ZERO.clone();
         const currentProgress = unit.node?.isValid
-            ? this.getRouteProgress(unit.node.position, origin, direction)
+            ? this.getRouteProgress(unit.node.position, origin, direction, rowDirection)
             : 0;
         const routeTrees = this.callbacks.getRouteTrees()
             .filter((tree) => {
                 if (!tree.alive || !tree.node.isValid || !this.isTreeOnRoute(tree, config, origin, direction)) {
                     return false;
                 }
-                return this.getRouteProgress(tree.node.position, origin, direction) >= currentProgress - 1;
+                return this.getRouteProgress(tree.node.position, origin, direction, rowDirection) >= currentProgress - 1;
             })
             .sort((a, b) => (
-                this.getRouteProgress(a.node.position, origin, direction)
-                - this.getRouteProgress(b.node.position, origin, direction)
+                this.getRouteProgress(a.node.position, origin, direction, rowDirection)
+                - this.getRouteProgress(b.node.position, origin, direction, rowDirection)
             ));
         const front = routeTrees[0] ?? null;
         if (!front || front.level > unit.level) {
@@ -574,11 +595,12 @@ export class CarSystem<T extends CarActor> {
 
     private getTreeWorkPosition(unit: CarUnit<T>, tree: TreeSlot, config: CarSystemConfig) {
         const direction = this.getRouteDirection(config);
+        const rowDirection = this.getRouteRowDirection(config, direction);
         const origin = unit.routeOrigin ?? unit.node?.position.clone() ?? Vec3.ZERO.clone();
         const approach = this.getApproachDistance(direction, config);
-        const treeProgress = this.getRouteProgress(tree.node.position, origin, direction);
+        const treeProgress = this.getRouteProgress(tree.node.position, origin, direction, rowDirection);
         const currentProgress = unit.node?.isValid
-            ? this.getRouteProgress(unit.node.position, origin, direction)
+            ? this.getRouteProgress(unit.node.position, origin, direction, rowDirection)
             : 0;
         return this.getRoutePosition(Math.max(currentProgress, treeProgress - approach), origin, direction);
     }
@@ -603,8 +625,22 @@ export class CarSystem<T extends CarActor> {
         return new Vec3(config.routeDirectionX / length, config.routeDirectionY / length, 0);
     }
 
-    private getRouteProgress(position: Vec3, origin: Vec3, direction: Vec3) {
-        return (position.x - origin.x) * direction.x + (position.y - origin.y) * direction.y;
+    private getRouteRowDirection(config: CarSystemConfig, routeDirection: Vec3) {
+        const length = Math.hypot(config.routeRowDirectionX, config.routeRowDirectionY);
+        if (length <= 0.0001) {
+            return new Vec3(routeDirection.y, -routeDirection.x, 0);
+        }
+        return new Vec3(config.routeRowDirectionX / length, config.routeRowDirectionY / length, 0);
+    }
+
+    private getRouteProgress(position: Vec3, origin: Vec3, direction: Vec3, rowDirection: Vec3) {
+        const basisCross = rowDirection.x * direction.y - rowDirection.y * direction.x;
+        const dx = position.x - origin.x;
+        const dy = position.y - origin.y;
+        if (Math.abs(basisCross) <= 0.0001) {
+            return dx * direction.x + dy * direction.y;
+        }
+        return (rowDirection.x * dy - rowDirection.y * dx) / basisCross;
     }
 
     private getRoutePosition(progress: number, origin: Vec3, direction: Vec3) {

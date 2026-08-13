@@ -3,8 +3,10 @@ import {
     Color,
     Component,
     Node,
+    Prefab,
     ResolutionPolicy,
     UITransform,
+    Vec3,
     view,
 } from 'cc';
 import { ActorSortSystem, type ActorSortConfig } from './ActorSortSystem';
@@ -48,6 +50,7 @@ import { SellZoneVisualSystem, type SellZoneVisualConfig } from './SellZoneVisua
 import { StartAreaSystem, type StartAreaConfig } from './StartAreaSystem';
 import { StoreLinkService, type StoreLinkConfig } from './StoreLinkService';
 import { TreeSystem, type TreeSystemConfig } from './TreeSystem';
+import { TreeRouteLayoutSystem, type TreeRouteLayoutConfig } from './TreeRouteLayoutSystem';
 import { TreeWoodDropSystem, type TreeWoodDropConfig } from './TreeWoodDropSystem';
 import { WoodCollectionSystem, type WoodCollectionConfig } from './WoodCollectionSystem';
 import { WorldSceneBuilder, type WorldSceneBuilderConfig } from './WorldSceneBuilder';
@@ -399,6 +402,30 @@ export class PlayableAdGame extends Component {
     @property({ type: Node, displayName: '三号车节点', tooltip: '第三辆已解锁车辆使用的可选场景节点。' })
     public carScene3Node: Node | null = null;
 
+    @property({ type: Node, displayName: '树路线根节点', tooltip: 'TreeRouteRoot 空节点，统一管理树阵基准点、方向点、树容器和三辆车。' })
+    public treeRouteRootNode: Node | null = null;
+
+    @property({ type: Node, displayName: '树阵起点', tooltip: '第 1 排第 1 棵树的位置。' })
+    public treeStartNode: Node | null = null;
+
+    @property({ type: Node, displayName: '车辆前进方向点', tooltip: 'TreeStart 指向 ForwardPoint 的方向就是三辆车共同的前进方向。' })
+    public treeForwardPointNode: Node | null = null;
+
+    @property({ type: Node, displayName: '树排方向点', tooltip: 'TreeStart 指向 RowPoint 的方向就是每排 12 棵树的排列方向。' })
+    public treeRowPointNode: Node | null = null;
+
+    @property({ type: Node, displayName: '自动生成树容器', tooltip: '运行时生成的全部树 Prefab 都放在 Trees 节点下。' })
+    public generatedTreesNode: Node | null = null;
+
+    @property({ type: Prefab, displayName: '1 级树 Prefab' })
+    public treeLevel1Prefab: Prefab | null = null;
+
+    @property({ type: Prefab, displayName: '2 级树 Prefab' })
+    public treeLevel2Prefab: Prefab | null = null;
+
+    @property({ type: Prefab, displayName: '3 级树 Prefab' })
+    public treeLevel3Prefab: Prefab | null = null;
+
     @property({ type: Node, displayName: '1级树木头堆节点', tooltip: '1 级树产出的固定木头堆位置标记，运行时会隐藏该标记节点。' })
     public treeWoodPileLevel1Node: Node | null = null;
 
@@ -477,6 +504,12 @@ export class PlayableAdGame extends Component {
     @property({ displayName: '三号车区域偏移 Y', tooltip: '三号车解锁区域相对一号车区域的运行时备用 Y 偏移。' })
     public carPlane3OffsetY = -180;
 
+    @property({ displayName: '车辆解锁台缩放', tooltip: '三个 20 金币 CarPlane 的 X/Y 缩放。' })
+    public carUnlockPlaneScale = 0.7;
+
+    @property({ displayName: '升级台车后距离', tooltip: '40/100 金币升级台沿车辆前进反方向与受阻车辆保持的距离。' })
+    public carUpgradePlaneBackOffset = 170;
+
     @property({ displayName: '二级升级触发半径', tooltip: '玩家距离二级升级区域中心多少像素内触发升级。' })
     public upgrade2ZoneRadius = 110;
 
@@ -484,7 +517,43 @@ export class PlayableAdGame extends Component {
     public upgrade3ZoneRadius = 120;
 
     @property({ displayName: '树等级列表', tooltip: '按树节点顺序填写等级，用英文逗号分隔，只支持 1、2、3。' })
-    public treeLevelCsv = '1,1,1,1,2,2,2,2,3,3,3,3,3';
+    public treeLevelCsv = '1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3';
+
+    @property({ displayName: '树阵排数', tooltip: '沿车辆前进方向生成多少排树。' })
+    public treeRouteRowCount = 13;
+
+    @property({ displayName: '1 级树排数', tooltip: '从车辆方向开始连续生成的 1 级树排数。' })
+    public treeLevel1RowCount = 6;
+
+    @property({ displayName: '2 级树排数', tooltip: '接在 1 级树之后生成的 2 级树排数。' })
+    public treeLevel2RowCount = 4;
+
+    @property({ displayName: '3 级树排数', tooltip: '接在 2 级树之后生成的 3 级树排数。' })
+    public treeLevel3RowCount = 3;
+
+    @property({ displayName: '每排树数量', tooltip: '每一整排横向生成多少棵树。' })
+    public treeRouteColumnCount = 12;
+
+    @property({ displayName: '每辆车负责列数', tooltip: '首车负责中间 5-8 列，后续两辆车负责 1-4 和 9-12 列。' })
+    public treeRouteColumnsPerCar = 4;
+
+    @property({ displayName: '同排树间距', tooltip: '2D 场景中同一排相邻树的中心距离。' })
+    public treeRouteTreeSpacing = 60;
+
+    @property({ displayName: '树排间距', tooltip: '沿车辆前进方向相邻两排树的中心距离。' })
+    public treeRouteRowSpacing = 80;
+
+    @property({ displayName: '车辆起步后退距离', tooltip: '车辆初始位置相对第 1 排树中心向后退的距离。' })
+    public treeRouteCarStartOffset = 270;
+
+    @property({ displayName: '车辆1横向偏移', tooltip: '车辆1及对应生成点沿 TreeStart 到 RowPoint 方向移动；负值向反方向移动。' })
+    public treeRouteCar1LateralOffset = 0;
+
+    @property({ displayName: '车辆2横向偏移', tooltip: '车辆2及对应生成点沿 TreeStart 到 RowPoint 方向移动；负值向反方向移动。' })
+    public treeRouteCar2LateralOffset = 0;
+
+    @property({ displayName: '车辆3横向偏移', tooltip: '车辆3及对应生成点沿 TreeStart 到 RowPoint 方向移动；负值向反方向移动。' })
+    public treeRouteCar3LateralOffset = 0;
 
     @property({ displayName: '车辆路线方向 X', tooltip: '车辆砍树路线使用的单位方向向量 X 分量。' })
     public carRouteDirectionX = 0.9238795325;
@@ -493,10 +562,10 @@ export class PlayableAdGame extends Component {
     public carRouteDirectionY = 0.3826834324;
 
     @property({ displayName: '车辆路线半宽', tooltip: '树距离车辆路线中心线超过该值时，车辆会忽略这棵树。' })
-    public carRouteHalfWidth = 145;
+    public carRouteHalfWidth = 58;
 
     @property({ displayName: '车辆单次砍树数量', tooltip: '车辆一次砍树流程最多可砍的树数量。' })
-    public carCutBatchSize = 3;
+    public carCutBatchSize = 4;
 
     @property({ displayName: '车辆受阻晃动距离', tooltip: '车辆被高等级树挡住时前后晃动的距离。' })
     public carBlockedWiggleDistance = 10;
@@ -1052,6 +1121,8 @@ export class PlayableAdGame extends Component {
     private actors!: Node;
     private ui!: Node;
     private overlay!: Node;
+    private resolvedCarRouteDirection: Vec3 | null = null;
+    private resolvedTreeRowDirection: Vec3 | null = null;
     private readonly assets = new GameAssetService();
     private readonly audioService = new AudioService({
         getAudioClip: (name) => this.assets.getAudioClip(name),
@@ -1184,8 +1255,13 @@ export class PlayableAdGame extends Component {
             canUnlockCar: (index) => this.carSystem.canUnlock(index, this.economy.hasCoins(this.carUnlockCost)),
             spendCoins: (amount) => this.gameplayActions.spendCoins(amount),
             unlockCar: (index) => this.gameplayActions.unlockCar(index),
-            canUpgradeCar: (level) => this.carSystem.canUpgradeTo(level, this.economy.hasCoins(level === 2 ? this.carUpgrade2Cost : this.carUpgrade3Cost)),
-            upgradeCar: (level) => this.gameplayActions.upgradeCar(level),
+            canUpgradeCar: (index, level) => this.carSystem.canUpgradeTo(
+                index,
+                level,
+                this.economy.hasCoins(level === 2 ? this.carUpgrade2Cost : this.carUpgrade3Cost),
+            ),
+            upgradeCar: (index, level) => this.gameplayActions.upgradeCar(index, level),
+            areAllCarsFullyUpgraded: () => this.carSystem.areAllCarsFullyUpgraded(),
             showNotEnoughCoinsPrompt: (target) => this.promptEffects.spawn(this.notEnoughCoinsPromptText, target),
             scheduleEndOverlay: (delay) => {
                 if (delay <= 0) {
@@ -1214,7 +1290,8 @@ export class PlayableAdGame extends Component {
             findChildDeep: (parent, name) => this.sceneNodes.findChildDeep(parent, name),
             findNumberedChildren: (parent, prefix) => this.sceneNodes.findNumberedChildren(parent, prefix),
             addZone: (name, node, radius, matchNodeBounds) => this.interactionZones.add(name, node, radius, matchNodeBounds),
-            rebuildTrees: (nodes) => this.treeSystem.rebuild(nodes),
+            buildTreeRoute: () => this.treeRouteLayout.build(),
+            rebuildTrees: (nodes, levels) => this.treeSystem.rebuild(nodes, levels),
         },
     );
     private readonly treeSystem = new TreeSystem(
@@ -1222,6 +1299,17 @@ export class PlayableAdGame extends Component {
         {
             findChildDeep: (parent, name) => this.sceneNodes.findChildDeep(parent, name),
             setupSpriteNode: (node, framePath, width, height) => this.uiFactory.setupSpriteNode(node, framePath, width, height),
+        },
+    );
+    private readonly treeRouteLayout = new TreeRouteLayoutSystem(
+        () => this.createTreeRouteLayoutConfig(),
+        {
+            getTreeLevel: (index) => this.treeSystem.getLevel(index),
+            syncLayer: (node, layer) => this.sceneNodes.syncLayer(node, layer),
+            setRouteDirections: (forward, row) => {
+                this.resolvedCarRouteDirection = forward.clone();
+                this.resolvedTreeRowDirection = row.clone();
+            },
         },
     );
     private readonly treeWoodDrops = new TreeWoodDropSystem(
@@ -1738,6 +1826,7 @@ export class PlayableAdGame extends Component {
             sellZoneRadius: this.sellZoneRadius,
             coinZoneRadius: this.coinZoneRadius,
             carZoneRadius: this.carZoneRadius,
+            carUnlockPlaneScale: this.carUnlockPlaneScale,
             carPlane2OffsetX: this.carPlane2OffsetX,
             carPlane2OffsetY: this.carPlane2OffsetY,
             carPlane3OffsetX: this.carPlane3OffsetX,
@@ -1847,6 +1936,44 @@ export class PlayableAdGame extends Component {
         };
     }
 
+    private createTreeRouteLayoutConfig(): TreeRouteLayoutConfig {
+        return {
+            layoutRoot: this.treeRouteRootNode,
+            treeStart: this.treeStartNode,
+            forwardPoint: this.treeForwardPointNode,
+            rowPoint: this.treeRowPointNode,
+            treesParent: this.generatedTreesNode,
+            treePrefabs: [this.treeLevel1Prefab, this.treeLevel2Prefab, this.treeLevel3Prefab],
+            cars: [this.carSceneNode, this.carScene2Node, this.carScene3Node],
+            carPlanes: [
+                this.interactionZones.getNode('car'),
+                this.interactionZones.getNode('car2'),
+                this.interactionZones.getNode('car3'),
+            ],
+            upgradePlanes: [
+                this.interactionZones.getNode('upgrade2'),
+                this.interactionZones.getNode('upgrade2Car2'),
+                this.interactionZones.getNode('upgrade2Car3'),
+                this.interactionZones.getNode('upgrade3'),
+                this.interactionZones.getNode('upgrade3Car2'),
+                this.interactionZones.getNode('upgrade3Car3'),
+            ],
+            carGroupOrder: [1, 0, 2],
+            carLateralOffsets: [
+                this.treeRouteCar1LateralOffset,
+                this.treeRouteCar2LateralOffset,
+                this.treeRouteCar3LateralOffset,
+            ],
+            levelRowCounts: [this.treeLevel1RowCount, this.treeLevel2RowCount, this.treeLevel3RowCount],
+            rowCount: this.treeRouteRowCount,
+            columnCount: this.treeRouteColumnCount,
+            columnsPerCar: this.treeRouteColumnsPerCar,
+            treeSpacing: this.treeRouteTreeSpacing,
+            rowSpacing: this.treeRouteRowSpacing,
+            carStartOffset: this.treeRouteCarStartOffset,
+        };
+    }
+
     private createTreeSystemConfig(): TreeSystemConfig {
         return {
             treeLevelCsv: this.treeLevelCsv,
@@ -1914,6 +2041,8 @@ export class PlayableAdGame extends Component {
     }
 
     private createCarSystemConfig(): CarSystemConfig {
+        const routeDirection = this.resolvedCarRouteDirection;
+        const rowDirection = this.resolvedTreeRowDirection;
         return {
             actors: this.actors ?? null,
             configuredCarNodes: [this.carSceneNode, this.carScene2Node, this.carScene3Node],
@@ -1922,8 +2051,16 @@ export class PlayableAdGame extends Component {
                 this.interactionZones.getNode('car2'),
                 this.interactionZones.getNode('car3'),
             ],
-            upgrade2Node: this.interactionZones.getNode('upgrade2'),
-            upgrade3Node: this.interactionZones.getNode('upgrade3'),
+            upgrade2Nodes: [
+                this.interactionZones.getNode('upgrade2'),
+                this.interactionZones.getNode('upgrade2Car2'),
+                this.interactionZones.getNode('upgrade2Car3'),
+            ],
+            upgrade3Nodes: [
+                this.interactionZones.getNode('upgrade3'),
+                this.interactionZones.getNode('upgrade3Car2'),
+                this.interactionZones.getNode('upgrade3Car3'),
+            ],
             previewFramePath: `${this.carLevel1FramePrefix}00000`,
             isEnded: this.gameSession.isEnded,
             treeOffsetX: this.carTreeOffsetX,
@@ -1933,10 +2070,13 @@ export class PlayableAdGame extends Component {
             returnDuration: this.carReturnDuration,
             workInterval: this.carWorkInterval,
             retryInterval: this.carRetryInterval,
-            routeDirectionX: this.carRouteDirectionX,
-            routeDirectionY: this.carRouteDirectionY,
+            routeDirectionX: routeDirection?.x ?? this.carRouteDirectionX,
+            routeDirectionY: routeDirection?.y ?? this.carRouteDirectionY,
+            routeRowDirectionX: rowDirection?.x ?? this.carRouteDirectionY,
+            routeRowDirectionY: rowDirection?.y ?? -this.carRouteDirectionX,
             routeHalfWidth: this.carRouteHalfWidth,
             cutBatchSize: this.carCutBatchSize,
+            upgradePlaneBackOffset: this.carUpgradePlaneBackOffset,
             blockedWiggleDistance: this.carBlockedWiggleDistance,
             blockedWiggleHalfDuration: this.carBlockedWiggleHalfDuration,
             blockedWiggleInterval: this.carBlockedWiggleInterval,

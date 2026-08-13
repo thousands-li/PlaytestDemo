@@ -6,6 +6,7 @@ export type TreeLevel = 1 | 2 | 3;
 export interface TreeSlot {
     node: Node;
     visual: Node;
+    shadow: Node | null;
     stump: Node | null;
     alive: boolean;
     level: TreeLevel;
@@ -42,7 +43,7 @@ export class TreeSystem {
         private readonly callbacks: TreeSystemCallbacks,
     ) {}
 
-    public rebuild(nodes: Node[]) {
+    public rebuild(nodes: Node[], explicitLevels: TreeLevel[] = []) {
         const config = this.getConfig();
         const levels = this.getTreeLevels(config.treeLevelCsv);
         this.stopAllShakes();
@@ -50,26 +51,41 @@ export class TreeSystem {
 
         nodes.forEach((treeRoot, index) => {
             treeRoot.active = true;
-            const level = levels[index] ?? 1;
+            const level = explicitLevels[index] ?? levels[index] ?? levels[levels.length - 1] ?? 1;
             const treeVisual = treeRoot.getChildByName('TreeVisual') ?? treeRoot;
+            const shadow = treeRoot.getChildByName('Shadow') ?? this.callbacks.findChildDeep(treeRoot, 'Shadow');
             const stump = treeRoot.getChildByName('TreeStump') ?? this.callbacks.findChildDeep(treeRoot, 'TreeStump');
 
-            this.callbacks.setupSpriteNode(treeVisual, this.getTreeImagePath(level, config), 118, 140);
+            // Prefabs with a Shadow node already own their visual sizes and sprite frames.
+            if (!shadow) {
+                this.callbacks.setupSpriteNode(treeVisual, this.getTreeImagePath(level, config), 118, 140);
+            }
             if (stump) {
-                this.callbacks.setupSpriteNode(stump, level === 3 ? config.stumpLargeImagePath : config.stumpSmallImagePath, 72, 48);
+                if (!shadow) {
+                    this.callbacks.setupSpriteNode(stump, level === 3 ? config.stumpLargeImagePath : config.stumpSmallImagePath, 72, 48);
+                }
                 stump.active = false;
             }
 
+            if (shadow) {
+                shadow.active = true;
+            }
             treeVisual.active = true;
             this.trees.push({
                 node: treeRoot,
                 visual: treeVisual,
+                shadow,
                 stump,
                 alive: true,
                 level,
                 visualBasePosition: treeVisual.position.clone(),
             });
         });
+    }
+
+    public getLevel(index: number) {
+        const levels = this.getTreeLevels(this.getConfig().treeLevelCsv);
+        return levels[index] ?? levels[levels.length - 1] ?? 1;
     }
 
     public findCuttable(maxLevel: TreeLevel) {
@@ -135,6 +151,9 @@ export class TreeSystem {
         this.stopShake(tree);
         tree.alive = false;
         tree.visual.active = false;
+        if (tree.shadow) {
+            tree.shadow.active = false;
+        }
         if (tree.stump) {
             tree.stump.active = true;
         }

@@ -27,8 +27,9 @@ export interface GameplayFlowCallbacks {
     canUnlockCar(index: number): boolean;
     spendCoins(amount: number): void;
     unlockCar(index: number): boolean;
-    canUpgradeCar(level: 2 | 3): boolean;
-    upgradeCar(level: 2 | 3): boolean;
+    canUpgradeCar(index: number, level: 2 | 3): boolean;
+    upgradeCar(index: number, level: 2 | 3): boolean;
+    areAllCarsFullyUpgraded(): boolean;
     showNotEnoughCoinsPrompt(target: Node): void;
     scheduleEndOverlay(delay: number): void;
 }
@@ -64,12 +65,14 @@ export class GameplayFlowSystem {
         this.callbacks.updateZoneHighlight('sell', sellZoneHit);
 
         const carZoneNames = ['car', 'car2', 'car3'];
+        const upgrade2ZoneNames = ['upgrade2', 'upgrade2Car2', 'upgrade2Car3'];
+        const upgrade3ZoneNames = ['upgrade3', 'upgrade3Car2', 'upgrade3Car3'];
         const carZoneHits = carZoneNames.map((name) => this.callbacks.zoneHit(name, playerNode));
-        const upgrade2ZoneHit = this.callbacks.zoneHit('upgrade2', playerNode);
-        const upgrade3ZoneHit = this.callbacks.zoneHit('upgrade3', playerNode);
+        const upgrade2ZoneHits = upgrade2ZoneNames.map((name) => this.callbacks.zoneHit(name, playerNode));
+        const upgrade3ZoneHits = upgrade3ZoneNames.map((name) => this.callbacks.zoneHit(name, playerNode));
         carZoneNames.forEach((name, index) => this.callbacks.updateZoneHighlight(name, carZoneHits[index]));
-        this.callbacks.updateZoneHighlight('upgrade2', upgrade2ZoneHit);
-        this.callbacks.updateZoneHighlight('upgrade3', upgrade3ZoneHit);
+        upgrade2ZoneNames.forEach((name, index) => this.callbacks.updateZoneHighlight(name, upgrade2ZoneHits[index]));
+        upgrade3ZoneNames.forEach((name, index) => this.callbacks.updateZoneHighlight(name, upgrade3ZoneHits[index]));
 
         if (this.collectCooldown <= 0) {
             const collectableWood = this.callbacks.getCollectableWood(playerNode);
@@ -99,16 +102,28 @@ export class GameplayFlowSystem {
                 playerNode,
             );
         });
-        this.checkPurchaseZone('upgrade2', upgrade2ZoneHit, config.carUpgrade2Cost, () => this.callbacks.canUpgradeCar(2), () => this.callbacks.upgradeCar(2), playerNode);
-        const completedFinalUpgrade = this.checkPurchaseZone(
-            'upgrade3',
-            upgrade3ZoneHit,
-            config.carUpgrade3Cost,
-            () => this.callbacks.canUpgradeCar(3),
-            () => this.callbacks.upgradeCar(3),
-            playerNode,
-        );
-        if (completedFinalUpgrade && config.endAfterFinalUpgrade) {
+        upgrade2ZoneNames.forEach((name, index) => {
+            this.checkPurchaseZone(
+                name,
+                upgrade2ZoneHits[index],
+                config.carUpgrade2Cost,
+                () => this.callbacks.canUpgradeCar(index, 2),
+                () => this.callbacks.upgradeCar(index, 2),
+                playerNode,
+            );
+        });
+        let completedFinalUpgrade = false;
+        upgrade3ZoneNames.forEach((name, index) => {
+            completedFinalUpgrade = this.checkPurchaseZone(
+                name,
+                upgrade3ZoneHits[index],
+                config.carUpgrade3Cost,
+                () => this.callbacks.canUpgradeCar(index, 3),
+                () => this.callbacks.upgradeCar(index, 3),
+                playerNode,
+            ) || completedFinalUpgrade;
+        });
+        if (completedFinalUpgrade && config.endAfterFinalUpgrade && this.callbacks.areAllCarsFullyUpgraded()) {
             this.callbacks.scheduleEndOverlay(config.endOverlayDelay);
         }
     }

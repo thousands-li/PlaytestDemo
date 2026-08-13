@@ -12,7 +12,19 @@ export type TutorialGuideStage =
     | 'treeSell'
     | 'complete';
 
-type GuideZoneName = 'start' | 'sell' | 'coin' | 'car' | 'car2' | 'car3' | 'upgrade2' | 'upgrade3';
+type GuideZoneName =
+    | 'start'
+    | 'sell'
+    | 'coin'
+    | 'car'
+    | 'car2'
+    | 'car3'
+    | 'upgrade2'
+    | 'upgrade2Car2'
+    | 'upgrade2Car3'
+    | 'upgrade3'
+    | 'upgrade3Car2'
+    | 'upgrade3Car3';
 
 export interface GuideSystemConfig {
     arrowOffsetY: number;
@@ -197,9 +209,9 @@ export class GuideSystem {
             case 'carUnlock':
                 return this.getFirstActiveZoneTarget(targets, ['car', 'car2', 'car3']);
             case 'upgrade2':
-                return targets.getZoneTarget('upgrade2');
+                return this.getFirstActiveZoneTarget(targets, ['upgrade2', 'upgrade2Car2', 'upgrade2Car3']);
             case 'upgrade3':
-                return targets.getZoneTarget('upgrade3');
+                return this.getFirstActiveZoneTarget(targets, ['upgrade3', 'upgrade3Car2', 'upgrade3Car3']);
             case 'treeWood':
                 return targets.getWoodTarget(false);
             default:

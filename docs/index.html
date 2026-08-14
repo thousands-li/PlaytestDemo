@@ -37,7 +37,22 @@
   <link rel="stylesheet" type="text/css" href="style.css"/>
 
 </head>
-<body>
+<body class="is-loading">
+  <div id="LoadingView" aria-live="polite">
+    <div class="loading-panel">
+      <div class="loading-mark" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="loading-title">Wood Rush</div>
+      <div id="LoadingText" class="loading-text">加载资源中...</div>
+      <div class="loading-track" aria-hidden="true">
+        <div class="loading-bar"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="GameDiv" cc_exact_fit_screen="true">
       <div id="Cocos3dGameContainer">
         <canvas id="GameCanvas" oncontextmenu="event.preventDefault()" tabindex="99"></canvas>
@@ -57,7 +72,61 @@
 <script src="src/import-map.json" type="systemjs-importmap" charset="utf-8"> </script>
 
 <script>
-    System.import('./index.js').catch(function(err) { console.error(err); })
+    (function () {
+      var loadingView = document.getElementById('LoadingView');
+      var loadingText = document.getElementById('LoadingText');
+      var hidden = false;
+      var startedAt = Date.now();
+
+      function hideLoadingView() {
+        if (hidden || !loadingView) {
+          return;
+        }
+        hidden = true;
+        document.body.classList.remove('is-loading');
+        loadingView.classList.add('is-hidden');
+        setTimeout(function () {
+          if (loadingView && loadingView.parentNode) {
+            loadingView.parentNode.removeChild(loadingView);
+          }
+        }, 650);
+      }
+
+      function showLoadingError(err) {
+        if (loadingText) {
+          loadingText.textContent = '加载失败，请刷新重试';
+        }
+        if (loadingView) {
+          loadingView.classList.add('has-error');
+        }
+        console.error(err);
+      }
+
+      window.__hideCocosLoadingView = hideLoadingView;
+      window.__showCocosLoadingError = showLoadingError;
+
+      function waitForFirstScene() {
+        var timer = setInterval(function () {
+          try {
+            if (window.cc && cc.director && cc.director.getScene && cc.director.getScene()) {
+              clearInterval(timer);
+              setTimeout(hideLoadingView, 300);
+              return;
+            }
+          } catch (err) {
+          }
+
+          if (Date.now() - startedAt > 30000 && window.cc && cc.game) {
+            clearInterval(timer);
+            hideLoadingView();
+          }
+        }, 120);
+      }
+
+      waitForFirstScene();
+
+      System.import('./index.js').catch(showLoadingError);
+    }());
 </script>
 
 </body>

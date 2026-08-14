@@ -20,8 +20,16 @@ System.register(["./application.js"], function (_export, _context) {
         return application.init(engine);
       }).then(function () {
         return application.start();
+      }).then(function () {
+        if (window.__hideCocosLoadingView) {
+          window.__hideCocosLoadingView();
+        }
       })["catch"](function (err) {
-        console.error(err);
+        if (window.__showCocosLoadingError) {
+          window.__showCocosLoadingError(err);
+        } else {
+          console.error(err);
+        }
       });
     }
   };

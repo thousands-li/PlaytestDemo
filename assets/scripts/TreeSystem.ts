@@ -11,6 +11,7 @@ export interface TreeSlot {
     alive: boolean;
     level: TreeLevel;
     visualBasePosition: Vec3;
+    visualBaseScale: Vec3;
 }
 
 export interface TreeSystemConfig {
@@ -79,6 +80,7 @@ export class TreeSystem {
                 alive: true,
                 level,
                 visualBasePosition: treeVisual.position.clone(),
+                visualBaseScale: treeVisual.scale.clone(),
             });
         });
     }
@@ -132,10 +134,11 @@ export class TreeSystem {
             if (!tree.alive || !tree.node.isValid || !tree.node.activeInHierarchy) {
                 return;
             }
+            const offset = this.getObstacleOffset(tree, config);
             obstacles.push({
                 node: tree.node,
-                offsetX: config.obstacleOffsetX,
-                offsetY: config.obstacleOffsetY,
+                offsetX: offset.x,
+                offsetY: offset.y,
                 radiusX,
                 radiusY,
             });
@@ -160,7 +163,7 @@ export class TreeSystem {
         return true;
     }
 
-    public startShake(tree: TreeSlot) {
+    public startShake(tree: TreeSlot, direction = Vec3.UNIT_X) {
         if (!tree.alive || !tree.visual?.isValid || this.shakeTweens.has(tree.visual)) {
             return;
         }
@@ -168,19 +171,26 @@ export class TreeSystem {
         const config = this.getConfig();
         const halfDuration = Math.max(0.01, config.blockedTreeShakeHalfDuration);
         const base = tree.visualBasePosition.clone();
-        const left = base.clone().add(new Vec3(-config.blockedTreeShakeOffsetX, -config.blockedTreeShakeOffsetY, 0));
-        const right = base.clone().add(new Vec3(config.blockedTreeShakeOffsetX, config.blockedTreeShakeOffsetY, 0));
+        const pushDirection = direction.lengthSqr() > 0.0001 ? direction.clone().normalize() : Vec3.UNIT_X.clone();
+        const nod = base.clone().add(new Vec3(
+            pushDirection.x * config.blockedTreeShakeOffsetX,
+            pushDirection.y * config.blockedTreeShakeOffsetX + config.blockedTreeShakeOffsetY,
+            0,
+        ));
+        const baseScale = tree.visualBaseScale.clone();
+        const nodScale = new Vec3(baseScale.x * 1.02, baseScale.y * 0.97, baseScale.z);
         tree.visual.setPosition(base);
+        tree.visual.setScale(baseScale);
         const shake = tween(tree.visual)
-            .to(halfDuration, { position: left })
-            .to(halfDuration, { position: right })
-            .to(halfDuration, { position: base })
+            .to(halfDuration, { position: nod, scale: nodScale })
+            .to(halfDuration, { position: base, scale: baseScale })
             .call(() => {
                 if (this.shakeTweens.get(tree.visual) === shake) {
                     this.shakeTweens.delete(tree.visual);
                 }
                 if (tree.visual?.isValid) {
                     tree.visual.setPosition(tree.visualBasePosition);
+                    tree.visual.setScale(tree.visualBaseScale);
                 }
             });
         this.shakeTweens.set(tree.visual, shake);
@@ -195,6 +205,7 @@ export class TreeSystem {
         }
         if (tree.visual?.isValid) {
             tree.visual.setPosition(tree.visualBasePosition);
+            tree.visual.setScale(tree.visualBaseScale);
         }
     }
 
@@ -220,6 +231,15 @@ export class TreeSystem {
             return config.treeLevel2ImagePath;
         }
         return config.treeLevel3ImagePath;
+    }
+
+    private getObstacleOffset(tree: TreeSlot, config: TreeSystemConfig) {
+        const groundAnchor = tree.shadow?.isValid
+            ? tree.shadow
+            : (tree.stump?.isValid ? tree.stump : null);
+        return groundAnchor
+            ? groundAnchor.position
+            : new Vec3(config.obstacleOffsetX, config.obstacleOffsetY, 0);
     }
 
     private clamp(value: number, min: number, max: number) {

@@ -21,6 +21,7 @@ export interface PlayerFootRingCallbacks {
 
 export class PlayerFootRingSystem {
     private ringNode: Node | null = null;
+    private sortYOffset = 0;
 
     public constructor(
         private readonly getConfig: () => PlayerFootRingConfig,
@@ -57,6 +58,7 @@ export class PlayerFootRingSystem {
             config.playerFootRingWidth,
             config.playerFootRingHeight,
         );
+        this.sortYOffset = config.playerFootRingOffsetY;
         ring.setPosition(
             player.position.x + config.playerFootRingOffsetX,
             player.position.y + config.playerFootRingOffsetY,
@@ -66,5 +68,12 @@ export class PlayerFootRingSystem {
 
     public isRingNode(node: Node) {
         return this.ringNode === node;
+    }
+
+    public getSortYOverride(node: Node) {
+        const player = this.getConfig().playerNode;
+        return this.ringNode === node && player?.isValid
+            ? player.position.y + this.sortYOffset
+            : null;
     }
 }

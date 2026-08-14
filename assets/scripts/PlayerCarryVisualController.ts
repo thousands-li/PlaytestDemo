@@ -11,6 +11,9 @@ interface CarryWoodVisual {
     height: number;
 }
 
+const CARRY_SORT_FRONT_BIAS_Y = -0.5;
+const CARRY_SORT_BACK_BIAS_Y = 0.5;
+
 export interface PlayerCarryVisualConfig {
     actors: Node | null;
     playerNode: Node | null;
@@ -156,7 +159,8 @@ export class PlayerCarryVisualController {
 
     public removeCoins(count: number) {
         this.coinNodes = this.coinNodes.filter((node) => node.isValid);
-        for (let i = 0; i < count; i += 1) {
+        const spentCount = Math.max(0, Math.floor(count));
+        for (let i = 0; i < spentCount; i += 1) {
             const coin = this.coinNodes.pop();
             coin?.destroy();
         }
@@ -171,6 +175,12 @@ export class PlayerCarryVisualController {
 
     public isBackpackNode(node: Node) {
         return this.backpackNode === node;
+    }
+
+    public getBackpackSortBiasY() {
+        return this.shouldRenderBackpackAbovePlayer(this.getConfig().currentDirection)
+            ? CARRY_SORT_FRONT_BIAS_Y
+            : CARRY_SORT_BACK_BIAS_Y;
     }
 
     public getWoodImagePaths() {
@@ -206,6 +216,7 @@ export class PlayerCarryVisualController {
 
         this.woodNodes = this.woodNodes.filter((node) => node.isValid);
         this.coinNodes = this.coinNodes.filter((node) => node.isValid);
+        backpack.active = config.showHeldCarryItems && (this.woodNodes.length > 0 || this.coinNodes.length > 0);
         const hasBothVisibleTypes = this.woodNodes.length > 0 && this.coinNodes.length > 0;
         this.woodNodes.forEach((wood, index) => {
             this.applyWoodVisualForDirection(wood, config.currentDirection);
@@ -291,6 +302,14 @@ export class PlayerCarryVisualController {
         return direction === '000' || direction === '045' || direction === '315';
     }
 
+    private shouldRenderBackpackAbovePlayer(direction: Direction) {
+        return direction === '000'
+            || direction === '045'
+            || direction === '090'
+            || direction === '270'
+            || direction === '315';
+    }
+
     private getCarryBackAxis(direction: Direction, config: PlayerCarryVisualConfig) {
         const front = getDirectionVector(direction);
         const axis = new Vec3(-front.x, -front.y * config.carryBackYScale, 0);
@@ -321,68 +340,54 @@ export class PlayerCarryVisualController {
     }
 
     private getWoodVisual(direction: Direction, config: PlayerCarryVisualConfig): CarryWoodVisual {
-        const maxLength = this.getWoodMaxLength(config);
         switch (direction) {
             case '000':
             case '180':
-                return this.getWoodVisualByMaxLength(
+                return this.getWoodVisualInBox(
                     config.carryWoodWideImagePath,
-                    maxLength,
                     config.woodCarryWideWidth,
                     config.woodCarryWideHeight,
                 );
             case '090':
             case '270':
-                return this.getWoodVisualByMaxLength(
+                return this.getWoodVisualInBox(
                     config.carryWoodImagePath,
-                    maxLength,
                     config.woodCarryWidth,
                     config.woodCarryHeight,
                 );
             case '045':
             case '225':
-                return this.getWoodVisualByMaxLength(
+                return this.getWoodVisualInBox(
                     config.carryWoodDiagonalAImagePath,
-                    maxLength,
                     config.woodCarryDiagonalWidth,
                     config.woodCarryDiagonalHeight,
                 );
             case '135':
             case '315':
             default:
-                return this.getWoodVisualByMaxLength(
+                return this.getWoodVisualInBox(
                     config.carryWoodDiagonalBImagePath,
-                    maxLength,
                     config.woodCarryDiagonalWidth,
                     config.woodCarryDiagonalHeight,
                 );
         }
     }
 
-    private getWoodMaxLength(config: PlayerCarryVisualConfig) {
-        return Math.max(
-            config.woodCarryWidth,
-            config.woodCarryHeight,
-            config.woodCarryWideWidth,
-            config.woodCarryWideHeight,
-            config.woodCarryDiagonalWidth,
-            config.woodCarryDiagonalHeight,
-        );
-    }
-
-    private getWoodVisualByMaxLength(path: string, maxLength: number, fallbackWidth: number, fallbackHeight: number) {
+    private getWoodVisualInBox(path: string, fallbackWidth: number, fallbackHeight: number) {
         const aspect = Math.max(0.01, this.callbacks.getSpriteFrameAspect(path, fallbackWidth, fallbackHeight));
-        if (aspect >= 1) {
+        const maxWidth = Math.max(1, fallbackWidth);
+        const maxHeight = Math.max(1, fallbackHeight);
+        if (aspect >= maxWidth / maxHeight) {
             return {
                 path,
-                width: maxLength,
-                height: maxLength / aspect,
+                width: maxWidth,
+                height: maxWidth / aspect,
             };
         }
         return {
             path,
-            width: maxLength * aspect,
-            height: maxLength,
+            width: maxHeight * aspect,
+            height: maxHeight,
         };
     }
 

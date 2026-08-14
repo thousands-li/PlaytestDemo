@@ -220,10 +220,10 @@ export class PlayableAdGame extends Component {
     public treeWoodPickupRadius = 105;
 
     @property({ displayName: '车后木头偏移 X', tooltip: '砍树产出的木头堆相对车辆中心的 X 偏移。' })
-    public treeWoodCarOffsetX = -70;
+    public treeWoodCarOffsetX = -35;
 
     @property({ displayName: '车后木头偏移 Y', tooltip: '砍树产出的木头堆相对车辆中心的 Y 偏移。' })
-    public treeWoodCarOffsetY = -62;
+    public treeWoodCarOffsetY = -80;
 
     @property({ displayName: '车后木头列数', tooltip: '砍树产出的木头堆每行数量。' })
     public treeWoodColumns = 5;
@@ -337,7 +337,7 @@ export class PlayableAdGame extends Component {
     public npcRenderHeight = 118;
 
     @property({ displayName: '车辆动画帧率', tooltip: '车辆动画每秒播放帧数。' })
-    public carFps = 10;
+    public carFps = 12;
 
     @property({ displayName: '特效动画帧率', tooltip: '升级特效动画每秒播放帧数。' })
     public effectFps = 12;
@@ -434,6 +434,9 @@ export class PlayableAdGame extends Component {
 
     @property({ type: Node, displayName: '3级树木头堆节点', tooltip: '3 级树产出的固定木头堆位置标记，运行时会隐藏该标记节点。' })
     public treeWoodPileLevel3Node: Node | null = null;
+
+    @property({ type: [Node], displayName: '车辆分级木头堆位置', tooltip: '按车辆1-3、等级1-3依次绑定 9 个木头堆空节点。' })
+    public treeWoodPileNodes: Node[] = [];
 
     @property({ type: [Node], displayName: '树节点列表', tooltip: '每棵树的父节点；位置、缩放从节点读取，等级从“树等级列表”读取。为空时按 Tree0、Tree1 自动查找。' })
     public treeSceneNodes: Node[] = [];
@@ -562,28 +565,34 @@ export class PlayableAdGame extends Component {
     public carRouteDirectionY = 0.3826834324;
 
     @property({ displayName: '车辆路线半宽', tooltip: '树距离车辆路线中心线超过该值时，车辆会忽略这棵树。' })
-    public carRouteHalfWidth = 58;
+    public carRouteHalfWidth = 82;
 
     @property({ displayName: '车辆单次砍树数量', tooltip: '车辆一次砍树流程最多可砍的树数量。' })
     public carCutBatchSize = 4;
 
     @property({ displayName: '车辆受阻晃动距离', tooltip: '车辆被高等级树挡住时前后晃动的距离。' })
-    public carBlockedWiggleDistance = 10;
+    public carBlockedWiggleDistance = 35;
 
     @property({ displayName: '车辆受阻半周期', tooltip: '车辆受阻晃动半个来回的时长，单位秒。' })
-    public carBlockedWiggleHalfDuration = 0.12;
+    public carBlockedWiggleHalfDuration = 0.45;
 
     @property({ displayName: '车辆受阻攻击间隔', tooltip: '车辆受阻时重复冲撞/攻击树的间隔，单位秒。' })
     public carBlockedWiggleInterval = 1;
 
+    @property({ displayName: '等级不足停车后退距离', tooltip: '车辆等级不够时，相对真正砍树点额外往后停开的距离。' })
+    public carBlockedTreeBackOffset = 120;
+
+    @property({ displayName: '等级不足停车左右偏移', tooltip: '车辆等级不够时，在树排方向上的左右微调。' })
+    public carBlockedTreeLateralOffset = 0;
+
     @property({ displayName: '受阻树晃动 X', tooltip: '不可砍树被车辆攻击时的水平晃动偏移。' })
-    public blockedTreeShakeOffsetX = 8;
+    public blockedTreeShakeOffsetX = 12;
 
     @property({ displayName: '受阻树晃动 Y', tooltip: '不可砍树被车辆攻击时的垂直晃动偏移。' })
-    public blockedTreeShakeOffsetY = 0;
+    public blockedTreeShakeOffsetY = -8;
 
     @property({ displayName: '受阻树晃动半周期', tooltip: '不可砍树单次晃动半个来回的时长，单位秒。' })
-    public blockedTreeShakeHalfDuration = 0.08;
+    public blockedTreeShakeHalfDuration = 0.16;
 
     @property({ displayName: 'Tree obstacle offset X', tooltip: 'Movement blocker center offset from each tree node.' })
     public treeObstacleOffsetX = 0;
@@ -597,6 +606,18 @@ export class PlayableAdGame extends Component {
     @property({ displayName: 'Tree obstacle radius Y', tooltip: 'Vertical radius of each living tree blocker.' })
     public treeObstacleRadiusY = 20;
 
+    @property({ displayName: 'Car obstacle offset X', tooltip: 'Movement blocker center offset from each unlocked car node.' })
+    public carObstacleOffsetX = 0;
+
+    @property({ displayName: 'Car obstacle offset Y', tooltip: 'Movement blocker center offset from each unlocked car node.' })
+    public carObstacleOffsetY = -30;
+
+    @property({ displayName: 'Car obstacle half width', tooltip: 'Half width of each unlocked car rectangle blocker.' })
+    public carObstacleRadiusX = 34;
+
+    @property({ displayName: 'Car obstacle half height', tooltip: 'Half height of each unlocked car rectangle blocker.' })
+    public carObstacleRadiusY = 14;
+
     @property({ displayName: '每棵树基础产木', tooltip: '车辆砍树时的基础产木数量。实际产量 = 基础产木 + 车辆等级 * 等级加成。' })
     public carBaseWoodGain = 2;
 
@@ -604,10 +625,10 @@ export class PlayableAdGame extends Component {
     public carLevelWoodGain = 1;
 
     @property({ displayName: '车靠近树偏移 X', tooltip: '车辆砍树时相对目标树的 X 偏移。' })
-    public carTreeOffsetX = -70;
+    public carTreeOffsetX = -130;
 
     @property({ displayName: '车靠近树偏移 Y', tooltip: '车辆砍树时相对目标树的 Y 偏移。' })
-    public carTreeOffsetY = -30;
+    public carTreeOffsetY = -70;
 
     @property({ displayName: '车去砍树时间', tooltip: '车辆从当前位置移动到目标树附近的时间，单位秒。' })
     public carMoveToTreeDuration = 0.75;
@@ -1133,6 +1154,9 @@ export class PlayableAdGame extends Component {
             isPlayerBackpackNode: (node) => this.playerCarry.isBackpackNode(node),
             isNpcCarryBackpackNode: (node) => this.npcVisual.isCarryBackpackNode(node),
             isPlayerFootRingNode: (node) => this.playerFootRing.isRingNode(node),
+            getSortBandOverride: (node) => this.getActorSortBandOverride(node),
+            getSortBiasY: (node) => this.getActorSortBiasY(node),
+            getSortYOverride: (node) => this.getActorSortYOverride(node),
         },
     );
     private readonly uiFactory = new GameUiFactory({
@@ -1346,14 +1370,15 @@ export class PlayableAdGame extends Component {
             setupSpriteNode: (node, framePath, width, height) => this.uiFactory.setupSpriteNode(node, framePath, width, height),
             createActor: (node) => this.carActorFactory.create(node),
             getRouteTrees: () => this.treeSystem.getRouteTrees(),
-            cutTree: (tree, carLevel) => this.gameplayActions.cutTree(tree, carLevel),
-            startTreeShake: (tree) => this.treeSystem.startShake(tree),
+            cutTree: (tree, carLevel, carIndex) => this.gameplayActions.cutTree(tree, carLevel, carIndex),
+            startTreeShake: (tree, direction) => this.treeSystem.startShake(tree, direction),
             stopTreeShake: (tree) => this.treeSystem.stopShake(tree),
             spawnUpgradeEffect: (position) => this.effectSystem.spawnUpgradeEffect(position),
             showNeedUpgradePrompt: (target) => this.promptEffects.spawn(this.needUpgradePromptText, target),
             playCarAudio: () => this.audioService.playEffect(this.carAudioName),
             playUiAudio: () => this.audioService.playEffect(this.uiAudioName),
             showWaitTreeWoodGuide: () => this.guideCoordinator.setStage('waitTreeWood'),
+            refreshWoodDropPoint: (carIndex, level) => this.treeWoodDrops.refreshPilePosition(carIndex, level),
             scheduleOnce: (done, delay) => this.scheduleOnce(done, delay),
         },
     );
@@ -1491,6 +1516,7 @@ export class PlayableAdGame extends Component {
             getMoveDirection: () => this.inputController.getMoveDirection(),
             setDirection: (direction) => {
                 this.lastDirection = direction;
+                this.playerCarry.updateBackpackPosition();
             },
         },
     );
@@ -1645,7 +1671,10 @@ export class PlayableAdGame extends Component {
             minY: this.moveMinY,
             maxY: this.moveMaxY,
             walkableBoundaryNode: this.getWalkableBoundaryNode(),
-            movementObstacles: this.treeSystem.getMovementObstacles(),
+            movementObstacles: [
+                ...this.treeSystem.getMovementObstacles(),
+                ...this.carSystem.getMovementObstacles(),
+            ],
             collisionFootInsetRatio: this.playerCollisionFootInsetRatio,
             collisionRadiusX: this.playerCollisionRadiusX,
             collisionRadiusY: this.playerCollisionRadiusY,
@@ -1939,6 +1968,7 @@ export class PlayableAdGame extends Component {
     private createTreeRouteLayoutConfig(): TreeRouteLayoutConfig {
         return {
             layoutRoot: this.treeRouteRootNode,
+            actors: this.actors ?? null,
             treeStart: this.treeStartNode,
             forwardPoint: this.treeForwardPointNode,
             rowPoint: this.treeRowPointNode,
@@ -1958,6 +1988,7 @@ export class PlayableAdGame extends Component {
                 this.interactionZones.getNode('upgrade3Car2'),
                 this.interactionZones.getNode('upgrade3Car3'),
             ],
+            woodDropPoints: this.treeWoodPileNodes,
             carGroupOrder: [1, 0, 2],
             carLateralOffsets: [
                 this.treeRouteCar1LateralOffset,
@@ -1971,6 +2002,8 @@ export class PlayableAdGame extends Component {
             treeSpacing: this.treeRouteTreeSpacing,
             rowSpacing: this.treeRouteRowSpacing,
             carStartOffset: this.treeRouteCarStartOffset,
+            woodDropOffsetX: this.treeWoodCarOffsetX,
+            woodDropOffsetY: this.treeWoodCarOffsetY,
         };
     }
 
@@ -1998,6 +2031,18 @@ export class PlayableAdGame extends Component {
             pileLevel1Node: this.treeWoodPileLevel1Node,
             pileLevel2Node: this.treeWoodPileLevel2Node,
             pileLevel3Node: this.treeWoodPileLevel3Node,
+            pileNodesByCarAndLevel: this.treeWoodPileNodes,
+            pileAnchorNodesByCarAndLevel: [
+                this.interactionZones.getNode('upgrade2'),
+                this.interactionZones.getNode('upgrade3'),
+                this.interactionZones.getNode('upgrade3'),
+                this.interactionZones.getNode('upgrade2Car2'),
+                this.interactionZones.getNode('upgrade3Car2'),
+                this.interactionZones.getNode('upgrade3Car2'),
+                this.interactionZones.getNode('upgrade2Car3'),
+                this.interactionZones.getNode('upgrade3Car3'),
+                this.interactionZones.getNode('upgrade3Car3'),
+            ],
             startFallbackNode: this.interactionZones.getNode('start'),
             woodImagePath: this.woodImagePath,
             settledWoodImagePathsCsv: this.treeWoodSettledImagePathsCsv,
@@ -2077,9 +2122,15 @@ export class PlayableAdGame extends Component {
             routeHalfWidth: this.carRouteHalfWidth,
             cutBatchSize: this.carCutBatchSize,
             upgradePlaneBackOffset: this.carUpgradePlaneBackOffset,
+            blockedTreeBackOffset: this.carBlockedTreeBackOffset,
+            blockedTreeLateralOffset: this.carBlockedTreeLateralOffset,
             blockedWiggleDistance: this.carBlockedWiggleDistance,
             blockedWiggleHalfDuration: this.carBlockedWiggleHalfDuration,
             blockedWiggleInterval: this.carBlockedWiggleInterval,
+            obstacleOffsetX: this.carObstacleOffsetX,
+            obstacleOffsetY: this.carObstacleOffsetY,
+            obstacleRadiusX: this.carObstacleRadiusX,
+            obstacleRadiusY: this.carObstacleRadiusY,
         };
     }
 
@@ -2204,6 +2255,36 @@ export class PlayableAdGame extends Component {
             carryBackpackSortBiasY: CARRY_BACKPACK_SORT_BIAS_Y,
             playerFootRingSortBiasY: PLAYER_FOOT_RING_SORT_BIAS_Y,
         };
+    }
+
+    private getActorSortYOverride(node: Node) {
+        return this.treeRouteLayout.getSortYOverride(node)
+            ?? this.playerFootRing.getSortYOverride(node)
+            ?? this.getPlayerSortYOverride(node)
+            ?? null;
+    }
+
+    private getActorSortBandOverride(node: Node) {
+        return this.treeRouteLayout.getSortBandOverride(node);
+    }
+
+    private getActorSortBiasY(node: Node) {
+        return this.playerCarry.isBackpackNode(node)
+            ? this.playerCarry.getBackpackSortBiasY()
+            : null;
+    }
+
+    private getPlayerSortYOverride(node: Node) {
+        const player = this.playerNode;
+        if (!player?.isValid || (node !== player && !this.playerCarry.isBackpackNode(node))) {
+            return null;
+        }
+
+        const transform = player.getComponent(UITransform);
+        if (!transform) {
+            return player.position.y;
+        }
+        return player.position.y - transform.contentSize.height * transform.anchorPoint.y * Math.abs(player.scale.y);
     }
 
 }

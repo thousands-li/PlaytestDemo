@@ -111,21 +111,21 @@ export class WorldSceneBuilder {
     }
 
     private buildUpgradePlane(index: number, level: 2 | 3, config: WorldSceneBuilderConfig) {
-        if (!config.world) {
-            return;
-        }
         const suffix = index === 0 ? '' : `Car${index + 1}`;
         const nodeName = `UpgradePlane${level}${suffix}`;
         const zoneName = `upgrade${level}${suffix}`;
         const configuredNode = index === 0
             ? (level === 2 ? config.upgrade2ZoneNode : config.upgrade3ZoneNode)
             : null;
-        const plane = this.callbacks.resolveSceneNode(configuredNode, config.world, nodeName);
+        const plane = this.resolvePlaneNode(configuredNode, config, nodeName);
+        if (!plane) {
+            return;
+        }
         const width = level === 2 ? 150 : 165;
         const height = level === 2 ? 92 : 100;
         const cost = level === 2 ? config.carUpgrade2Cost : config.carUpgrade3Cost;
         const radius = level === 2 ? config.upgrade2ZoneRadius : config.upgrade3ZoneRadius;
-        this.uiFactory.setupSpriteNode(plane, config.platformImagePath, width, height);
+        this.uiFactory.setSpriteFrameAndSize(plane, config.platformImagePath, width, height);
         plane.setScale(1, 1, 1);
         plane.setSiblingIndex(plane.parent?.children.length ?? 0);
         this.uiFactory.addOrUpdateLabel(`UpgradeCost${level}`, plane, cost.toString(), 0, -2, 28, Color.WHITE);
@@ -160,9 +160,9 @@ export class WorldSceneBuilder {
         active: boolean,
         config: WorldSceneBuilderConfig,
     ) {
-        const plane = configNode ?? this.callbacks.findChildDeep(config.world!, nodeName);
+        const plane = this.resolvePlaneNode(configNode, config, nodeName);
         if (!plane?.isValid) {
-            console.warn(`${nodeName} is missing in the scene. Add it under World instead of creating it at runtime.`);
+            console.warn(`${nodeName} is missing in the scene.`);
             return null;
         }
         this.uiFactory.setupSpriteNode(plane, config.platformImagePath, 150, 92);
@@ -173,6 +173,16 @@ export class WorldSceneBuilder {
         this.callbacks.addZone(zoneName, plane, config.carZoneRadius);
         plane.active = active;
         return plane;
+    }
+
+    private resolvePlaneNode(configNode: Node | null, config: WorldSceneBuilderConfig, nodeName: string) {
+        if (!config.world?.isValid) {
+            return null;
+        }
+        const existing = (configNode?.isValid ? configNode : null)
+            ?? this.callbacks.findChildDeep(config.world, nodeName)
+            ?? (config.actors?.isValid ? this.callbacks.findChildDeep(config.actors, nodeName) : null);
+        return this.callbacks.resolveSceneNode(existing, config.world, nodeName);
     }
 
     private buildUpgradePrompt(plane: Node, config: WorldSceneBuilderConfig) {

@@ -10,7 +10,12 @@ export interface ActorSortCallbacks {
     isPlayerBackpackNode(node: Node): boolean;
     isNpcCarryBackpackNode(node: Node): boolean;
     isPlayerFootRingNode(node: Node): boolean;
+    getSortBandOverride(node: Node): number | null;
+    getSortBiasY(node: Node): number | null;
+    getSortYOverride(node: Node): number | null;
 }
+
+const DEFAULT_ACTOR_SORT_BAND = 2;
 
 export class ActorSortSystem {
     constructor(
@@ -24,18 +29,30 @@ export class ActorSortSystem {
             return;
         }
         const children = actors.children.slice();
-        children.sort((a, b) => this.getActorSortY(b) - this.getActorSortY(a));
+        children.sort((a, b) => (
+            this.getActorSortBand(a) - this.getActorSortBand(b)
+            || this.getActorSortY(b) - this.getActorSortY(a)
+        ));
         children.forEach((child, index) => child.setSiblingIndex(index));
+    }
+
+    private getActorSortBand(node: Node) {
+        return this.callbacks.getSortBandOverride(node) ?? DEFAULT_ACTOR_SORT_BAND;
     }
 
     private getActorSortY(node: Node) {
         const config = this.getConfig();
-        return node.position.y
-            + (this.callbacks.isPlayerBackpackNode(node) || this.callbacks.isNpcCarryBackpackNode(node)
-                ? config.carryBackpackSortBiasY
-                : 0)
+        const overrideY = this.callbacks.getSortYOverride(node);
+        return (overrideY ?? node.position.y)
+            + (this.callbacks.getSortBiasY(node) ?? this.getDefaultSortBiasY(node, config))
             + (this.callbacks.isPlayerFootRingNode(node)
                 ? config.playerFootRingSortBiasY
                 : 0);
+    }
+
+    private getDefaultSortBiasY(node: Node, config: ActorSortConfig) {
+        return this.callbacks.isPlayerBackpackNode(node) || this.callbacks.isNpcCarryBackpackNode(node)
+            ? config.carryBackpackSortBiasY
+            : 0;
     }
 }

@@ -23,13 +23,18 @@ export class CarActorFactory {
     public create(node: Node) {
         const config = this.getConfig();
         const sprite = node.getComponent(Sprite) ?? node.addComponent(Sprite);
+        sprite.enabled = true;
         sprite.sizeMode = Sprite.SizeMode.CUSTOM;
-        this.callbacks.ensureTransform(node, config.carSpriteWidth, config.carSpriteHeight);
+        this.callbacks.ensureTransform(node, config.carSpriteWidth, config.carSpriteHeight)
+            .setContentSize(config.carSpriteWidth, config.carSpriteHeight);
 
+        const level1Frames = this.collectLevelFrames(1, config.carLevel1FramePrefix);
+        const level2Frames = this.collectLevelFrames(2, config.carLevel2FramePrefix);
+        const level3Frames = this.collectLevelFrames(3, config.carLevel3FramePrefix);
         const car = new AnimatedSprite(node, sprite);
-        car.addClip('car1', this.collectLevelFrames(1, config.carLevel1FramePrefix));
-        car.addClip('car2', this.collectLevelFrames(2, config.carLevel2FramePrefix));
-        car.addClip('car3', this.collectLevelFrames(3, config.carLevel3FramePrefix));
+        car.addClip('car1', level1Frames);
+        car.addClip('car2', level2Frames);
+        car.addClip('car3', level3Frames);
         return car;
     }
 

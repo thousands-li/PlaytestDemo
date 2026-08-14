@@ -67,6 +67,10 @@ export class PlayerMovementSystem {
             return;
         }
 
+        const idlePosition = this.constrainMovement(playerNode.position, playerNode.position.clone(), config);
+        if (Vec3.squaredDistance(idlePosition, playerNode.position) > 0.0001) {
+            playerNode.setPosition(idlePosition);
+        }
         playerActor.play(`idle${config.currentDirection}`);
     }
 
@@ -142,7 +146,7 @@ export class PlayerMovementSystem {
                 this.getObstacleCenter(obstacle, config, this.obstacleCenter);
                 const radiusX = this.getObstacleRadiusX(obstacle, config);
                 const radiusY = this.getObstacleRadiusY(obstacle, config);
-                if (this.pushPointOutOfEllipse(this.collisionPoint, this.obstacleCenter, radiusX, radiusY)) {
+                if (this.pushPointOutOfObstacle(this.collisionPoint, this.obstacleCenter, radiusX, radiusY, obstacle)) {
                     moved = true;
                 }
             });
@@ -172,11 +176,12 @@ export class PlayerMovementSystem {
                 return false;
             }
             this.getObstacleCenter(obstacle, config, this.obstacleCenter);
-            return this.isPointInsideEllipse(
+            return this.isPointInsideObstacle(
                 this.collisionPoint,
                 this.obstacleCenter,
                 this.getObstacleRadiusX(obstacle, config),
                 this.getObstacleRadiusY(obstacle, config),
+                obstacle,
             );
         });
     }
@@ -249,10 +254,43 @@ export class PlayerMovementSystem {
         return true;
     }
 
+    private pushPointOutOfRectangle(point: Vec3, center: Vec3, halfWidth: number, halfHeight: number) {
+        const dx = point.x - center.x;
+        const dy = point.y - center.y;
+        if (Math.abs(dx) >= halfWidth || Math.abs(dy) >= halfHeight) {
+            return false;
+        }
+
+        const pushX = halfWidth - Math.abs(dx);
+        const pushY = halfHeight - Math.abs(dy);
+        if (pushX <= pushY) {
+            point.x = center.x + (dx >= 0 ? halfWidth + 0.5 : -halfWidth - 0.5);
+        } else {
+            point.y = center.y + (dy >= 0 ? halfHeight + 0.5 : -halfHeight - 0.5);
+        }
+        return true;
+    }
+
+    private pushPointOutOfObstacle(point: Vec3, center: Vec3, radiusX: number, radiusY: number, obstacle: MovementObstacle) {
+        return obstacle.shape === 'rectangle'
+            ? this.pushPointOutOfRectangle(point, center, radiusX, radiusY)
+            : this.pushPointOutOfEllipse(point, center, radiusX, radiusY);
+    }
+
     private isPointInsideEllipse(point: Vec3, center: Vec3, radiusX: number, radiusY: number) {
         const dx = point.x - center.x;
         const dy = point.y - center.y;
         return dx * dx / (radiusX * radiusX) + dy * dy / (radiusY * radiusY) < 1;
+    }
+
+    private isPointInsideRectangle(point: Vec3, center: Vec3, halfWidth: number, halfHeight: number) {
+        return Math.abs(point.x - center.x) < halfWidth && Math.abs(point.y - center.y) < halfHeight;
+    }
+
+    private isPointInsideObstacle(point: Vec3, center: Vec3, radiusX: number, radiusY: number, obstacle: MovementObstacle) {
+        return obstacle.shape === 'rectangle'
+            ? this.isPointInsideRectangle(point, center, radiusX, radiusY)
+            : this.isPointInsideEllipse(point, center, radiusX, radiusY);
     }
 
     private isObstacleActive(obstacle: MovementObstacle) {

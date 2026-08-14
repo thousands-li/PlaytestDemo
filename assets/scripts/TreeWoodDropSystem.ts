@@ -11,7 +11,7 @@ interface TreeWoodStackSlot {
 }
 
 interface TreeWoodPlacement {
-    level: TreeLevel;
+    pileKey: string;
     slotIndex: number;
     stackLevel: number;
 }
@@ -26,6 +26,8 @@ export interface TreeWoodDropConfig {
     pileLevel1Node: Node | null;
     pileLevel2Node: Node | null;
     pileLevel3Node: Node | null;
+    pileNodesByCarAndLevel: (Node | null)[];
+    pileAnchorNodesByCarAndLevel: (Node | null)[];
     startFallbackNode: Node | null;
     woodImagePath: string;
     settledWoodImagePathsCsv: string;
@@ -60,11 +62,12 @@ export interface TreeWoodDropCallbacks {
 }
 
 export class TreeWoodDropSystem {
-    private readonly pileNodes = new Map<TreeLevel, Node>();
-    private readonly markerNodes = new Map<TreeLevel, Node>();
-    private readonly stackSlots = new Map<TreeLevel, TreeWoodStackSlot[]>();
+    private markerRoot: Node | null = null;
+    private readonly pileNodes = new Map<string, Node>();
+    private readonly markerNodes = new Map<string, Node>();
+    private readonly stackSlots = new Map<string, TreeWoodStackSlot[]>();
     private readonly woodPlacements = new Map<Node, TreeWoodPlacement>();
-    private readonly nextSlotIndexes = new Map<TreeLevel, number>();
+    private readonly nextSlotIndexes = new Map<string, number>();
 
     public constructor(
         private readonly getConfig: () => TreeWoodDropConfig,
@@ -87,9 +90,17 @@ export class TreeWoodDropSystem {
                 marker.active = false;
             }
         });
+        for (let carIndex = 0; carIndex < 3; carIndex += 1) {
+            for (let level = 1; level <= 3; level += 1) {
+                const anchor = config.pileAnchorNodesByCarAndLevel[this.getPileMarkerIndex(carIndex, level as TreeLevel)];
+                if (anchor?.isValid) {
+                    this.getOrCreateMarkerAtAnchor(carIndex, level as TreeLevel, anchor, config);
+                }
+            }
+        }
     }
 
-    public spawnFromTree(tree: TreeSlot, count: number, done: (wood: Node) => void) {
+    public spawnFromTree(tree: TreeSlot, carIndex: number, carLevel: TreeLevel, count: number, done: (wood: Node) => void) {
         const config = this.getConfig();
         const actors = config.actors;
         if (!tree.node.isValid || !actors?.isValid) {
@@ -97,14 +108,15 @@ export class TreeWoodDropSystem {
         }
 
         const gain = Math.max(0, Math.floor(count));
-        const marker = this.getPileMarker(tree, config);
-        const pile = this.getPileNode(tree.level, marker, config);
-        const slots = this.getStackSlots(tree.level, config);
+        const pileKey = this.getPileKey(carIndex, carLevel);
+        const marker = this.getPileMarker(tree, carIndex, carLevel, pileKey, config);
+        const pile = this.getPileNode(pileKey, marker, config);
+        const slots = this.getStackSlots(pileKey, config);
         const settledPaths = this.getSettledWoodImagePaths(config);
         const flyingPaths = this.getFlyingWoodImagePaths(config, settledPaths);
 
         for (let i = 0; i < gain; i += 1) {
-            const slotIndex = this.pickStackSlot(tree.level, slots);
+            const slotIndex = this.pickStackSlot(pileKey, slots);
             const slot = slots[slotIndex];
             const stackLevel = slot.height;
             const variantIndex = this.getWoodVariantIndex(slot, stackLevel, Math.max(settledPaths.length, flyingPaths.length));
@@ -140,7 +152,7 @@ export class TreeWoodDropSystem {
                 settledImagePath,
                 settledSize,
                 i * config.flyDelay,
-                { level: tree.level, slotIndex, stackLevel },
+                { pileKey, slotIndex, stackLevel },
                 () => done(wood),
                 config,
             );
@@ -154,35 +166,81 @@ export class TreeWoodDropSystem {
         }
 
         this.woodPlacements.delete(wood);
-        this.rebuildStackHeights(placement.level);
-        this.sortPile(placement.level);
+        this.rebuildStackHeights(placement.pileKey);
+        this.sortPile(placement.pileKey);
     }
 
-    private getPileMarker(tree: TreeSlot, config: TreeWoodDropConfig) {
-        const configuredMarker = this.getConfiguredPileMarker(tree.level, config);
+    public refreshPilePosition(carIndex: number, level: TreeLevel) {
+        const config = this.getConfig();
+        if (!config.actors?.isValid) {
+            return;
+        }
+
+        const marker = this.getConfiguredPileMarker(carIndex, level, config);
+        if (marker?.isValid) {
+            marker.active = false;
+        }
+
+        const pileKey = this.getPileKey(carIndex, level);
+        const pile = this.pileNodes.get(pileKey);
+        if (!pile?.isValid || !marker?.isValid) {
+            return;
+        }
+
+        pile.setPosition(this.getActorsPosition(marker, config));
+        this.sortPile(pileKey);
+        this.callbacks.sortActors();
+    }
+
+    private getPileMarker(
+        tree: TreeSlot,
+        carIndex: number,
+        level: TreeLevel,
+        pileKey: string,
+        config: TreeWoodDropConfig,
+    ) {
+        const configuredMarker = this.getConfiguredPileMarker(carIndex, level, config);
         if (configuredMarker?.isValid) {
             configuredMarker.active = false;
             return configuredMarker;
         }
 
-        const existingMarker = this.markerNodes.get(tree.level);
+        const existingMarker = this.markerNodes.get(pileKey);
         if (existingMarker?.isValid) {
             return existingMarker;
         }
 
         const fallbackBase = tree.node.position ?? config.startFallbackNode?.position ?? Vec3.ZERO;
         const marker = this.callbacks.makeNode(
-            `TreeWoodPileMarkerLv${tree.level}`,
+            `TreeWoodPileMarker${pileKey}`,
             config.actors!,
             fallbackBase.x + config.carOffsetX,
             fallbackBase.y + config.carOffsetY,
         );
         marker.active = false;
-        this.markerNodes.set(tree.level, marker);
+        this.markerNodes.set(pileKey, marker);
         return marker;
     }
 
-    private getConfiguredPileMarker(level: TreeLevel, config: TreeWoodDropConfig) {
+    private getConfiguredPileMarker(carIndex: number, level: TreeLevel, config: TreeWoodDropConfig) {
+        const marker = config.pileNodesByCarAndLevel[this.getPileMarkerIndex(carIndex, level)];
+        if (marker?.isValid) {
+            const anchor = config.pileAnchorNodesByCarAndLevel[this.getPileMarkerIndex(carIndex, level)];
+            if (anchor?.isValid && config.actors?.isValid) {
+                if (marker.parent !== config.actors) {
+                    marker.setParent(config.actors, true);
+                }
+                marker.setPosition(this.getMarkerPositionFromAnchor(anchor, config));
+            }
+            return marker;
+        }
+        const anchor = config.pileAnchorNodesByCarAndLevel[this.getPileMarkerIndex(carIndex, level)];
+        if (anchor?.isValid) {
+            return this.getOrCreateMarkerAtAnchor(carIndex, level, anchor, config);
+        }
+        if (carIndex !== 0) {
+            return null;
+        }
         if (level === 1) {
             return config.pileLevel1Node;
         }
@@ -194,22 +252,23 @@ export class TreeWoodDropSystem {
 
     private getConfiguredPileMarkers(config: TreeWoodDropConfig) {
         return [
+            ...config.pileNodesByCarAndLevel,
             config.pileLevel1Node,
             config.pileLevel2Node,
             config.pileLevel3Node,
         ];
     }
 
-    private getPileNode(level: TreeLevel, marker: Node, config: TreeWoodDropConfig) {
+    private getPileNode(pileKey: string, marker: Node, config: TreeWoodDropConfig) {
         const markerPosition = this.getActorsPosition(marker, config);
-        const existingPile = this.pileNodes.get(level);
+        const existingPile = this.pileNodes.get(pileKey);
         if (existingPile?.isValid) {
             existingPile.setPosition(markerPosition);
             return existingPile;
         }
 
-        const pile = this.callbacks.makeNode(`TreeWoodPileLv${level}`, config.actors!, markerPosition.x, markerPosition.y);
-        this.pileNodes.set(level, pile);
+        const pile = this.callbacks.makeNode(`TreeWoodPile${pileKey}`, config.actors!, markerPosition.x, markerPosition.y);
+        this.pileNodes.set(pileKey, pile);
         return pile;
     }
 
@@ -221,15 +280,15 @@ export class TreeWoodDropSystem {
             ?? node.position.clone();
     }
 
-    private getStackSlots(level: TreeLevel, config: TreeWoodDropConfig) {
-        const slots = this.stackSlots.get(level);
+    private getStackSlots(pileKey: string, config: TreeWoodDropConfig) {
+        const slots = this.stackSlots.get(pileKey);
         if (slots && slots.length > 0) {
             return slots;
         }
 
         const builtSlots = this.buildStackSlots(config);
-        this.stackSlots.set(level, builtSlots);
-        this.nextSlotIndexes.set(level, 0);
+        this.stackSlots.set(pileKey, builtSlots);
+        this.nextSlotIndexes.set(pileKey, 0);
         return builtSlots;
     }
 
@@ -263,10 +322,10 @@ export class TreeWoodDropSystem {
         return slots;
     }
 
-    private pickStackSlot(level: TreeLevel, slots: TreeWoodStackSlot[]) {
+    private pickStackSlot(pileKey: string, slots: TreeWoodStackSlot[]) {
         let bestIndex = 0;
         let bestHeight = Number.POSITIVE_INFINITY;
-        const startIndex = this.nextSlotIndexes.get(level) ?? 0;
+        const startIndex = this.nextSlotIndexes.get(pileKey) ?? 0;
         for (let offset = 0; offset < slots.length; offset += 1) {
             const index = (startIndex + offset) % slots.length;
             const height = slots[index].height;
@@ -276,7 +335,7 @@ export class TreeWoodDropSystem {
             }
         }
 
-        this.nextSlotIndexes.set(level, (bestIndex + 1) % slots.length);
+        this.nextSlotIndexes.set(pileKey, (bestIndex + 1) % slots.length);
         return bestIndex;
     }
 
@@ -329,16 +388,16 @@ export class TreeWoodDropSystem {
                 wood.setPosition(targetPosition);
                 wood.setScale(targetScale);
                 this.woodPlacements.set(wood, placement);
-                this.sortPile(placement.level);
+                this.sortPile(placement.pileKey);
                 this.callbacks.sortActors();
                 done();
             })
             .start();
     }
 
-    private sortPile(level: TreeLevel) {
-        const pile = this.pileNodes.get(level);
-        const slots = this.stackSlots.get(level);
+    private sortPile(pileKey: string) {
+        const pile = this.pileNodes.get(pileKey);
+        const slots = this.stackSlots.get(pileKey);
         if (!pile?.isValid || !slots) {
             return;
         }
@@ -365,8 +424,8 @@ export class TreeWoodDropSystem {
             .forEach((wood, index) => wood.setSiblingIndex(index));
     }
 
-    private rebuildStackHeights(level: TreeLevel) {
-        const slots = this.stackSlots.get(level);
+    private rebuildStackHeights(pileKey: string) {
+        const slots = this.stackSlots.get(pileKey);
         if (!slots) {
             return;
         }
@@ -379,7 +438,7 @@ export class TreeWoodDropSystem {
                 this.woodPlacements.delete(wood);
                 return;
             }
-            if (placement.level !== level) {
+            if (placement.pileKey !== pileKey) {
                 return;
             }
             const slot = slots[placement.slotIndex];
@@ -392,6 +451,42 @@ export class TreeWoodDropSystem {
     private getSettledWoodImagePaths(config: TreeWoodDropConfig) {
         const paths = this.parseCsv(config.settledWoodImagePathsCsv);
         return paths.length > 0 ? paths : [config.woodImagePath];
+    }
+
+    private getOrCreateMarkerAtAnchor(carIndex: number, level: TreeLevel, anchor: Node, config: TreeWoodDropConfig) {
+        const pileKey = this.getPileKey(carIndex, level);
+        const existing = this.markerNodes.get(pileKey);
+        if (existing?.isValid) {
+            existing.setPosition(this.getMarkerPositionFromAnchor(anchor, config));
+            return existing;
+        }
+        const position = this.getMarkerPositionFromAnchor(anchor, config);
+        const marker = this.callbacks.makeNode(`TreeWoodPileMarker${pileKey}`, this.getMarkerRoot(config), position.x, position.y);
+        marker.active = false;
+        this.markerNodes.set(pileKey, marker);
+        return marker;
+    }
+
+    private getMarkerRoot(config: TreeWoodDropConfig) {
+        if (this.markerRoot?.isValid) {
+            return this.markerRoot;
+        }
+        this.markerRoot = this.callbacks.makeNode('WoodDropPoints', config.actors!);
+        this.markerRoot.setPosition(Vec3.ZERO);
+        return this.markerRoot;
+    }
+
+    private getMarkerPositionFromAnchor(anchor: Node, config: TreeWoodDropConfig) {
+        const base = this.getActorsPosition(anchor, config);
+        return base.add(new Vec3(config.carOffsetX, config.carOffsetY, 0));
+    }
+
+    private getPileKey(carIndex: number, level: TreeLevel) {
+        return `Car${Math.max(0, Math.floor(carIndex)) + 1}Lv${level}`;
+    }
+
+    private getPileMarkerIndex(carIndex: number, level: TreeLevel) {
+        return Math.max(0, Math.floor(carIndex)) * 3 + level - 1;
     }
 
     private getFlyingWoodImagePaths(config: TreeWoodDropConfig, settledPaths: string[]) {

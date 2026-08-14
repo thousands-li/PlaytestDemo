@@ -142,14 +142,14 @@ export class GameplayActionSystem {
         }
     }
 
-    public cutTree(tree: TreeSlot, carLevel: TreeLevel) {
+    public cutTree(tree: TreeSlot, carLevel: TreeLevel, carIndex: number) {
         const config = this.getConfig();
         if (!this.treeSystem.cut(tree)) {
             return;
         }
         this.audioService.playEffect(config.cutTreeAudioName);
         const gain = config.carBaseWoodGain + carLevel * config.carLevelWoodGain;
-        this.treeWoodDrops.spawnFromTree(tree, gain, (wood) => {
+        this.treeWoodDrops.spawnFromTree(tree, carIndex, carLevel, gain, (wood) => {
             this.woodCollection.addDroppedWood(wood);
             this.callbacks.activateTreeWoodGuideIfWaiting();
         });

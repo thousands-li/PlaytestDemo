@@ -1,8 +1,9 @@
-import { instantiate, Node, Prefab, Vec3 } from 'cc';
+import { instantiate, Mat4, Node, Prefab, UITransform, Vec3 } from 'cc';
 import type { TreeLevel } from './TreeSystem';
 
 export interface TreeRouteLayoutConfig {
     layoutRoot: Node | null;
+    actors: Node | null;
     treeStart: Node | null;
     forwardPoint: Node | null;
     rowPoint: Node | null;
@@ -11,6 +12,7 @@ export interface TreeRouteLayoutConfig {
     cars: (Node | null)[];
     carPlanes: (Node | null)[];
     upgradePlanes: (Node | null)[];
+    woodDropPoints: (Node | null)[];
     carGroupOrder: number[];
     carLateralOffsets: number[];
     levelRowCounts: number[];
@@ -20,6 +22,8 @@ export interface TreeRouteLayoutConfig {
     treeSpacing: number;
     rowSpacing: number;
     carStartOffset: number;
+    woodDropOffsetX: number;
+    woodDropOffsetY: number;
 }
 
 export interface TreeRouteLayoutResult {
@@ -33,7 +37,13 @@ export interface TreeRouteLayoutCallbacks {
     setRouteDirections(forward: Vec3, row: Vec3): void;
 }
 
+const ROUTE_STUMP_SORT_BAND = 0;
+const ROUTE_PLANE_SORT_BAND = 1;
+
 export class TreeRouteLayoutSystem {
+    private readonly worldPosition = new Vec3();
+    private readonly rootWorldMatrix = new Mat4();
+
     public constructor(
         private readonly getConfig: () => TreeRouteLayoutConfig,
         private readonly callbacks: TreeRouteLayoutCallbacks,
@@ -42,11 +52,12 @@ export class TreeRouteLayoutSystem {
     public build() {
         const config = this.getConfig();
         const root = config.layoutRoot;
+        const actors = config.actors;
         const treeStart = config.treeStart;
         const forwardPoint = config.forwardPoint;
         const rowPoint = config.rowPoint;
         const treesParent = config.treesParent;
-        if (!root?.isValid || !treeStart?.isValid || !forwardPoint?.isValid || !rowPoint?.isValid || !treesParent?.isValid) {
+        if (!root?.isValid || !actors?.isValid || !treeStart?.isValid || !forwardPoint?.isValid || !rowPoint?.isValid || !treesParent?.isValid) {
             return null;
         }
 
@@ -79,8 +90,9 @@ export class TreeRouteLayoutSystem {
         }
 
         this.callbacks.setRouteDirections(forward, side);
-        this.clearTrees(treesParent);
-        const planesParent = this.preparePlaneLayer(config, root);
+        const routeNodes = this.getRouteNodes(config);
+        this.clearGeneratedTrees(actors, routeNodes);
+        this.clearGeneratedTrees(treesParent, new Set<Node>());
 
         const trees: Node[] = [];
         const levels: TreeLevel[] = [];
@@ -110,29 +122,56 @@ export class TreeRouteLayoutSystem {
                     config.treeSpacing,
                     config.rowSpacing,
                 ));
+                tree.setParent(actors, true);
+                this.callbacks.syncLayer(tree, actors.layer);
                 tree.active = true;
                 trees.push(tree);
                 levels.push(level);
             }
         }
 
-        this.sortTreesByDepth(trees);
-        this.placeCars(config, start, side, forward, columnCount, columnsPerCar);
-        this.placeUpgradePlanes(config);
-        this.refreshLayerOrder(config, treesParent, planesParent);
+        this.placeCars(config, root, actors, start, side, forward, columnCount, columnsPerCar);
+        this.placeUpgradePlanes(config, actors);
+        this.placeWoodDropPoints(config, root, actors);
         root.active = true;
         return { trees, levels } satisfies TreeRouteLayoutResult;
     }
 
-    private clearTrees(parent: Node) {
+    public getSortYOverride(node: Node) {
+        return this.isRouteNode(node)
+            ? this.getDepthY(node, this.getCarNodes(this.getConfig()), this.getRoutePlaneNodes(this.getConfig()))
+            : null;
+    }
+
+    public getSortBandOverride(node: Node) {
+        if (!this.isRouteNode(node)) {
+            return null;
+        }
+        if (this.isActiveTreeStump(node)) {
+            return ROUTE_STUMP_SORT_BAND;
+        }
+        if (this.getRoutePlaneNodes(this.getConfig()).has(node)) {
+            return ROUTE_PLANE_SORT_BAND;
+        }
+        return null;
+    }
+
+    private clearGeneratedTrees(parent: Node, preservedNodes: Set<Node>) {
         parent.children.slice().forEach((child) => {
-            child.removeFromParent();
-            child.destroy();
+            if (preservedNodes.has(child)) {
+                return;
+            }
+            if (this.isGeneratedTree(child)) {
+                child.removeFromParent();
+                child.destroy();
+            }
         });
     }
 
     private placeCars(
         config: TreeRouteLayoutConfig,
+        root: Node,
+        actors: Node,
         start: Vec3,
         side: Vec3,
         forward: Vec3,
@@ -142,6 +181,9 @@ export class TreeRouteLayoutSystem {
         config.cars.forEach((car, index) => {
             if (!car?.isValid) {
                 return;
+            }
+            if (car.parent !== actors) {
+                car.setParent(actors, true);
             }
             const configuredGroup = Math.floor(config.carGroupOrder[index] ?? index);
             const maxGroupIndex = Math.max(0, Math.ceil(columnCount / columnsPerCar) - 1);
@@ -158,76 +200,100 @@ export class TreeRouteLayoutSystem {
             const position = start.clone()
                 .add(side.clone().multiplyScalar(centerColumn * config.treeSpacing + lateralOffset))
                 .subtract(forward.clone().multiplyScalar(config.carStartOffset));
-            car.setPosition(position);
+            car.setPosition(this.toActorsPosition(position, root, actors));
 
             const plane = config.carPlanes[index];
             if (plane?.isValid) {
+                this.moveToActorsLayer(plane, actors);
                 plane.setWorldPosition(car.worldPosition);
             }
         });
     }
 
-    private sortTreesByDepth(trees: Node[]) {
-        trees
-            .slice()
-            .sort((a, b) => b.position.y - a.position.y || a.position.x - b.position.x)
-            .forEach((tree, index) => tree.setSiblingIndex(index));
-    }
-
-    private placeUpgradePlanes(config: TreeRouteLayoutConfig) {
+    private placeUpgradePlanes(config: TreeRouteLayoutConfig, actors: Node) {
         const primaryPlane = config.carPlanes[0];
         if (!primaryPlane?.isValid) {
             return;
         }
         config.upgradePlanes.forEach((plane) => {
             if (plane?.isValid) {
+                this.moveToActorsLayer(plane, actors);
                 plane.setWorldPosition(primaryPlane.worldPosition);
             }
         });
     }
 
-    private preparePlaneLayer(config: TreeRouteLayoutConfig, root: Node) {
-        const planes = [...config.carPlanes, ...config.upgradePlanes]
-            .filter((plane): plane is Node => !!plane?.isValid);
-        const existing = root.getChildByName('RoutePlanes');
-        const planesParent = existing?.isValid ? existing : new Node('RoutePlanes');
-        if (!existing?.isValid) {
-            root.addChild(planesParent);
-            const sourceScale = planes[0]?.parent?.worldScale ?? Vec3.ONE;
-            const rootScale = root.worldScale;
-            planesParent.setScale(
-                this.divideScale(sourceScale.x, rootScale.x),
-                this.divideScale(sourceScale.y, rootScale.y),
-                this.divideScale(sourceScale.z, rootScale.z),
-            );
+    private moveToActorsLayer(node: Node, actors: Node) {
+        if (node.parent !== actors) {
+            node.setParent(actors, true);
         }
-        this.callbacks.syncLayer(planesParent, root.layer);
-
-        planes.forEach((plane) => {
-            if (plane.parent !== planesParent) {
-                plane.setParent(planesParent, true);
-            }
-        });
-        return planesParent;
+        this.callbacks.syncLayer(node, actors.layer);
     }
 
-    private refreshLayerOrder(config: TreeRouteLayoutConfig, treesParent: Node, planesParent: Node) {
-        const root = config.layoutRoot;
-        if (!root?.isValid) {
-            return;
+    private getDepthY(node: Node, carNodes: Set<Node>, routePlaneNodes: Set<Node>) {
+        const groundAnchor = this.getVisibleGroundAnchor(node);
+        if (groundAnchor?.isValid) {
+            return node.position.y + groundAnchor.position.y * Math.abs(node.scale.y);
         }
 
-        treesParent.setSiblingIndex(root.children.length - 1);
-        planesParent.setSiblingIndex(root.children.length - 1);
-        config.cars.forEach((car) => {
-            if (car?.isValid && car.parent === root) {
-                car.setSiblingIndex(root.children.length - 1);
+        if (carNodes.has(node)) {
+            const transform = node.getComponent(UITransform);
+            if (transform) {
+                return node.position.y - transform.contentSize.height * transform.anchorPoint.y * Math.abs(node.scale.y);
             }
-        });
+        }
+
+        if (routePlaneNodes.has(node)) {
+            const transform = node.getComponent(UITransform);
+            if (transform) {
+                return node.position.y
+                    - transform.contentSize.height * transform.anchorPoint.y * Math.abs(node.scale.y);
+            }
+        }
+
+        return node.position.y;
     }
 
-    private divideScale(value: number, divisor: number) {
-        return Math.abs(divisor) > 0.0001 ? value / divisor : value;
+    private isRouteNode(node: Node) {
+        const config = this.getConfig();
+        return this.isGeneratedTree(node)
+            || config.cars.some((car) => car === node)
+            || config.carPlanes.some((plane) => plane === node)
+            || config.upgradePlanes.some((plane) => plane === node)
+            || config.woodDropPoints.some((point) => point === node);
+    }
+
+    private getVisibleGroundAnchor(node: Node) {
+        const anchors = [node.getChildByName('Shadow'), node.getChildByName('TreeStump')];
+        return anchors.find((anchor) => anchor?.isValid && anchor.active) ?? anchors.find((anchor) => anchor?.isValid) ?? null;
+    }
+
+    private isActiveTreeStump(node: Node) {
+        const stump = node.getChildByName('TreeStump');
+        return !!stump?.isValid && stump.active;
+    }
+
+    private getRouteNodes(config: TreeRouteLayoutConfig) {
+        return new Set([
+            ...this.getCarNodes(config),
+            ...this.getRoutePlaneNodes(config),
+            ...config.woodDropPoints.filter((point): point is Node => !!point?.isValid),
+        ]);
+    }
+
+    private getCarNodes(config: TreeRouteLayoutConfig) {
+        return new Set(config.cars.filter((car): car is Node => !!car?.isValid));
+    }
+
+    private getRoutePlaneNodes(config: TreeRouteLayoutConfig) {
+        return new Set([
+            ...config.carPlanes,
+            ...config.upgradePlanes,
+        ].filter((plane): plane is Node => !!plane?.isValid));
+    }
+
+    private isGeneratedTree(node: Node) {
+        return /^Tree\d+$/.test(node.name);
     }
 
     private getLevelForRow(row: number, levelRowCounts: number[]): TreeLevel {
@@ -253,5 +319,36 @@ export class TreeRouteLayoutSystem {
         return start.clone()
             .add(side.clone().multiplyScalar(column * treeSpacing))
             .add(forward.clone().multiplyScalar(row * rowSpacing));
+    }
+
+    private placeWoodDropPoints(config: TreeRouteLayoutConfig, _root: Node, actors: Node) {
+        config.woodDropPoints.forEach((point, flatIndex) => {
+            if (!point?.isValid) {
+                return;
+            }
+            const carIndex = Math.floor(flatIndex / 3);
+            const level = flatIndex % 3 + 1;
+            const anchor = level === 1
+                ? config.upgradePlanes[carIndex]
+                : config.upgradePlanes[3 + carIndex];
+            if (!anchor?.isValid) {
+                return;
+            }
+            this.moveToActorsLayer(point, actors);
+            const anchorPosition = actors.getComponent(UITransform)?.convertToNodeSpaceAR(anchor.worldPosition)
+                ?? anchor.position.clone();
+            point.setPosition(
+                anchorPosition.x + config.woodDropOffsetX,
+                anchorPosition.y + config.woodDropOffsetY,
+                0,
+            );
+            point.active = false;
+        });
+    }
+
+    private toActorsPosition(localPosition: Vec3, root: Node, actors: Node) {
+        root.getWorldMatrix(this.rootWorldMatrix);
+        Vec3.transformMat4(this.worldPosition, localPosition, this.rootWorldMatrix);
+        return actors.inverseTransformPoint(new Vec3(), this.worldPosition);
     }
 }

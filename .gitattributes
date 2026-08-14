@@ -1,9 +1,7 @@
-# 只对 NewAssets 文件夹下资源启用LFS，不会碰旧资源
-Assets/NewAssets/**.png filter=lfs diff=lfs merge=lfs -text
-Assets/NewAssets/**.gif filter=lfs diff=lfs merge=lfs -text
-Assets/NewAssets/**.fbx filter=lfs diff=lfs merge=lfs -text
+assets/NewAssets/**.png filter=lfs diff=lfs merge=lfs -text
+assets/NewAssets/**.gif filter=lfs diff=lfs merge=lfs -text
+assets/NewAssets/**.fbx filter=lfs diff=lfs merge=lfs -text
 
-# 脚本、配置当作文本
 *.ts text
 *.js text
 *.json text

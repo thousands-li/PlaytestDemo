@@ -122,9 +122,17 @@ canvas {
   transform: translateY(10vh);
 }
 
+.loading-title {
+  margin-bottom: 18px;
+  color: #fff8d8;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
 .loading-text {
   position: absolute;
-  top: 18px;
+  top: calc(100% + 10px);
   color: rgba(248, 243, 219, 0.78);
   font-size: 15px;
   line-height: 1.6;
@@ -173,6 +181,10 @@ canvas {
 }
 
 @media (max-width: 480px) {
+  .loading-title {
+    font-size: 21px;
+  }
+
   .loading-text {
     font-size: 14px;
   }

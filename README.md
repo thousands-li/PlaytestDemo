@@ -1,6 +1,6 @@
 # PlaytestDemo
 
-![PlaytestDemo 预览](assets/resources/images/preview_all.jpg)
+![PlaytestDemo 演示](assets/docs/PlaytestDemo.gif)
 
 ## 项目简介
 
